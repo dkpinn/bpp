@@ -1,3 +1,4 @@
+
 from fastapi import FastAPI, File, UploadFile, Query
 from fastapi.responses import StreamingResponse, PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,9 +8,10 @@ import fitz  # PyMuPDF
 from datetime import datetime
 import re
 from collections import defaultdict
-import pytesseract
-from PIL import Image
-import tempfile
+# OCR fallback temporarily disabled
+# import pytesseract
+# from PIL import Image
+# import tempfile
 
 app = FastAPI()
 
@@ -41,13 +43,14 @@ def extract_lines_by_y(page):
 
     return ordered_lines
 
-def ocr_fallback(page):
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-        pix = page.get_pixmap(dpi=300)
-        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-        img.save(tmp.name, format="PNG")
-        text = pytesseract.image_to_string(Image.open(tmp.name))
-        return text.splitlines()
+# OCR fallback disabled for now
+# def ocr_fallback(page):
+#     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+#         pix = page.get_pixmap(dpi=300)
+#         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+#         img.save(tmp.name, format="PNG")
+#         text = pytesseract.image_to_string(Image.open(tmp.name))
+#         return text.splitlines()
 
 def is_transaction_line(text_line):
     return re.match(r"^(\d{1,2}[\/\-\s]\d{1,2})", text_line)
@@ -82,8 +85,9 @@ async def parse_pdf(file: UploadFile = File(...), debug: bool = Query(False)):
         current_transaction = None
         for page_number, page in enumerate(doc, start=1):
             lines = extract_lines_by_y(page)
+            # Skip OCR fallback for now
             if not lines:
-                lines = ocr_fallback(page)
+                continue
             debug_lines.append(f"--- Page {page_number} ---")
             debug_lines.extend(lines)
             for line in lines:
