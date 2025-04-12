@@ -7,6 +7,9 @@ import fitz  # PyMuPDF
 from datetime import datetime
 import re
 from collections import defaultdict
+import pytesseract
+from PIL import Image
+import tempfile
 
 app = FastAPI()
 
@@ -21,6 +24,9 @@ app.add_middleware(
 
 def extract_lines_by_y(page):
     words = page.get_text("words")
+    if not words:
+        return []
+
     lines = defaultdict(list)
     for w in words:
         x0, y0, x1, y1, word, *_ = w
@@ -35,11 +41,19 @@ def extract_lines_by_y(page):
 
     return ordered_lines
 
+def ocr_fallback(page):
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+        pix = page.get_pixmap(dpi=300)
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        img.save(tmp.name, format="PNG")
+        text = pytesseract.image_to_string(Image.open(tmp.name))
+        return text.splitlines()
+
 def is_transaction_line(text_line):
     return re.match(r"^(\d{1,2}[\/\-\s]\d{1,2})", text_line)
 
 def extract_fields(line, inferred_year):
-    match = re.match(r"^(\d{1,2}[\/\-\s]\d{1,2})\s+(.*?)\s+(-?[\d,.]+)\s+(-?[\d,.]+)$", line)
+    match = re.match(r"^(\d{1,2}[\/\-\s]\d{1,2})\s+(.*?)\s+(-?[\d.,\s]+)\s+(-?[\d.,\s]+)$", line)
     if match:
         date_str, desc, amount, balance = match.groups()
         date_full = f"{date_str.strip()}/{inferred_year}"
@@ -47,11 +61,13 @@ def extract_fields(line, inferred_year):
             date = datetime.strptime(date_full, "%d/%m/%Y").strftime("%Y-%m-%d")
         except:
             date = date_full
+        def clean_number(n):
+            return n.replace(',', '').replace(' ', '')
         return {
             "date": date,
             "description": desc.strip(),
-            "amount": amount.replace(',', ''),
-            "balance": balance.replace(',', '')
+            "amount": clean_number(amount),
+            "balance": clean_number(balance)
         }
     return None
 
@@ -66,6 +82,8 @@ async def parse_pdf(file: UploadFile = File(...), debug: bool = Query(False)):
         current_transaction = None
         for page_number, page in enumerate(doc, start=1):
             lines = extract_lines_by_y(page)
+            if not lines:
+                lines = ocr_fallback(page)
             debug_lines.append(f"--- Page {page_number} ---")
             debug_lines.extend(lines)
             for line in lines:
