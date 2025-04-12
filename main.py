@@ -38,27 +38,36 @@ def extract_lines_by_y(page):
     return ordered_lines
 
 def is_transaction_line(text_line):
-    return re.match(r"^(\d{1,2}[\/\-\s]\d{1,2}[\/\-\s]\d{2,4})", text_line)
+    return re.match(r"^\d{1,2}[\/\-\s]\d{1,2}[\/\-\s]\d{2,4}", text_line)
 
 def extract_fields(line, inferred_year):
-    pattern = re.compile(
-        r"^(\d{1,2}[\/\-\s]\d{1,2}[\/\-\s]\d{2,4})\s+(.*?)\s+([\d.,]+)\s+([\d.,]+)$"
-    )
-    match = pattern.match(line)
-    if match:
-        date_str, desc, amount, balance = match.groups()
-        try:
-            date = datetime.strptime(date_str.strip(), "%d/%m/%Y").strftime("%Y-%m-%d")
-        except:
-            date = date_str.strip()
-        def clean(n):
-            return n.replace(",", "").replace(" ", "")
-        return {
-            "date": date,
-            "description": desc.strip(),
-            "amount": clean(amount),
-            "balance": clean(balance)
-        }
+    def clean(n):
+        return n.replace(",", "").replace(" ", "")
+
+    patterns = [
+        re.compile(r"^(\d{1,2}[\/\-\s]\d{1,2}[\/\-\s]\d{2,4})\s+(.*?)\s+(\d{1,3}(?:[ \d]{3})*(?:\.\d{2}))\s+(\d{1,3}(?:[ \d]{3})*(?:\.\d{2}))$"),
+        re.compile(r"^(\d{1,2}[\/\-\s]\d{1,2}[\/\-\s]\d{2,4})\s+(.*?)\s+(\d+[.,]\d{2})\s+(\d+[.,]\d{2})$"),
+        re.compile(r"^(\d{1,2}[\/\-\s]\d{1,2}[\/\-\s]\d{2,4})\s+(.*?)\s+(\d+[.,]\d{2})$")
+    ]
+
+    for pattern in patterns:
+        match = pattern.match(line)
+        if match:
+            parts = match.groups()
+            date_str = parts[0].strip()
+            try:
+                date = datetime.strptime(date_str, "%d/%m/%Y").strftime("%Y-%m-%d")
+            except:
+                date = date_str
+            desc = parts[1].strip()
+            amount = clean(parts[2]) if len(parts) > 2 else ""
+            balance = clean(parts[3]) if len(parts) > 3 else ""
+            return {
+                "date": date,
+                "description": desc,
+                "amount": amount,
+                "balance": balance
+            }
     return None
 
 @app.post("/parse")
@@ -70,6 +79,8 @@ async def parse_pdf(file: UploadFile = File(...), debug: bool = Query(False), pr
 
     with fitz.open(stream=content, filetype="pdf") as doc:
         current_transaction = None
+        previous_balance = None
+
         for page_number, page in enumerate(doc, start=1):
             lines = extract_lines_by_y(page)
             if not lines:
@@ -77,6 +88,11 @@ async def parse_pdf(file: UploadFile = File(...), debug: bool = Query(False), pr
             debug_lines.append(f"--- Page {page_number} ---")
             debug_lines.extend(lines)
             for line in lines:
+                if "Balance Brought Forward" in line:
+                    match = re.search(r"Balance Brought Forward\s+([\d.,\s]+)", line)
+                    if match:
+                        previous_balance = float(match.group(1).replace(",", "").replace(" ", ""))
+
                 if is_transaction_line(line):
                     if current_transaction:
                         transactions.append(current_transaction)
@@ -86,8 +102,8 @@ async def parse_pdf(file: UploadFile = File(...), debug: bool = Query(False), pr
                 else:
                     if current_transaction:
                         current_transaction['description'] += ' ' + line.strip()
-        if current_transaction:
-            transactions.append(current_transaction)
+            if current_transaction:
+                transactions.append(current_transaction)
 
     if debug:
         return PlainTextResponse("\n".join(debug_lines), media_type="text/plain")
