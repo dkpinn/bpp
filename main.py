@@ -45,9 +45,8 @@ def extract_fields(line, inferred_year):
         return n.replace(",", "").replace(" ", "")
 
     patterns = [
-        re.compile(r"^(\d{1,2}[\/\-\s]\d{1,2}[\/\-\s]\d{2,4})\s+(.*?)\s+(\d{1,3}(?:[ \d]{3})*(?:\.\d{2}))\s+(\d{1,3}(?:[ \d]{3})*(?:\.\d{2}))$"),
-        re.compile(r"^(\d{1,2}[\/\-\s]\d{1,2}[\/\-\s]\d{2,4})\s+(.*?)\s+(\d+[.,]\d{2})\s+(\d+[.,]\d{2})$"),
-        re.compile(r"^(\d{1,2}[\/\-\s]\d{1,2}[\/\-\s]\d{2,4})\s+(.*?)\s+(\d+[.,]\d{2})$")
+        re.compile(r"^(\d{1,2}[\/\-\s]\d{1,2}[\/\-\s]\d{2,4})\s+(.*?)\s+([\d\s]+\.?\d{2})\s+([\d\s]+\.?\d{2})$"),
+        re.compile(r"^(\d{1,2}[\/\-\s]\d{1,2}[\/\-\s]\d{2,4})\s+(.*?)\s+([\d\s]+\.?\d{2})$")
     ]
 
     for pattern in patterns:
@@ -118,11 +117,9 @@ async def parse_pdf(file: UploadFile = File(...), debug: bool = Query(False), pr
         amount = float(row['amount']) if row['amount'] else 0.0
         official_balance = float(row['balance']) if row['balance'] else ""
 
-        # Determine debit or credit based on calculated difference
         if running_balance is not None:
             diff = round(official_balance - running_balance, 2) if row['balance'] else amount
-            is_credit = diff > 0
-            signed_amount = abs(diff) if is_credit else -abs(diff)
+            signed_amount = diff
             calculated_balance = round(running_balance + signed_amount, 2)
             running_balance = calculated_balance
         else:
