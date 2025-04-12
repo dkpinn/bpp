@@ -32,7 +32,11 @@ def extract_lines_by_y(page):
     ordered_lines = []
     for y in sorted(lines.keys()):
         line_words = sorted(lines[y], key=lambda x: x[0])
-        line = " ".join(word for _, word in line_words)
+        line = {
+            "y": y,
+            "line": " ".join(word for _, word in line_words),
+            "positions": [x for x, _ in line_words]
+        }
         ordered_lines.append(line)
 
     return ordered_lines
@@ -85,8 +89,9 @@ async def parse_pdf(file: UploadFile = File(...), debug: bool = Query(False), pr
             if not lines:
                 continue
             debug_lines.append(f"--- Page {page_number} ---")
-            debug_lines.extend(lines)
-            for line in lines:
+            debug_lines.extend([l["line"] for l in lines])
+            for line_obj in lines:
+                line = line_obj["line"]
                 if "Balance Brought Forward" in line:
                     match = re.search(r"Balance Brought Forward\s+([\d.,\s]+)", line)
                     if match:
