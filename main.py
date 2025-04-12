@@ -38,24 +38,26 @@ def extract_lines_by_y(page):
     return ordered_lines
 
 def is_transaction_line(text_line):
-    return re.match(r"^(\d{1,2}[\/\-\s]\d{1,2})", text_line)
+    return re.match(r"^(\d{1,2}[\/\-\s]\d{1,2}[\/\-\s]\d{2,4})", text_line)
 
 def extract_fields(line, inferred_year):
-    match = re.match(r"^(\d{1,2}[\/\-\s]\d{1,2})\s+(.*?)\s+(-?[\d.,\s]+)\s+(-?[\d.,\s]+)$", line)
+    pattern = re.compile(
+        r"^(\d{1,2}[\/\-\s]\d{1,2}[\/\-\s]\d{2,4})\s+(.*?)\s+([\d.,]+)\s+([\d.,]+)$"
+    )
+    match = pattern.match(line)
     if match:
         date_str, desc, amount, balance = match.groups()
-        date_full = f"{date_str.strip()}/{inferred_year}"
         try:
-            date = datetime.strptime(date_full, "%d/%m/%Y").strftime("%Y-%m-%d")
+            date = datetime.strptime(date_str.strip(), "%d/%m/%Y").strftime("%Y-%m-%d")
         except:
-            date = date_full
-        def clean_number(n):
-            return n.replace(',', '').replace(' ', '')
+            date = date_str.strip()
+        def clean(n):
+            return n.replace(",", "").replace(" ", "")
         return {
             "date": date,
             "description": desc.strip(),
-            "amount": clean_number(amount),
-            "balance": clean_number(balance)
+            "amount": clean(amount),
+            "balance": clean(balance)
         }
     return None
 
@@ -96,7 +98,6 @@ async def parse_pdf(file: UploadFile = File(...), debug: bool = Query(False), pr
     if preview:
         return JSONResponse(content={"preview": transactions})
 
-    # Build CSV string
     output = io.StringIO()
     writer = csv.DictWriter(output, fieldnames=["date", "description", "amount", "balance"])
     writer.writeheader()
