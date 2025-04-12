@@ -111,19 +111,45 @@ async def parse_pdf(file: UploadFile = File(...), debug: bool = Query(False), pr
     if not transactions:
         raise HTTPException(status_code=400, detail="No transactions found in PDF")
 
+    calculated_transactions = []
+    running_balance = previous_balance
+
+    for row in transactions:
+        amount = float(row['amount']) if row['amount'] else 0.0
+        official_balance = float(row['balance']) if row['balance'] else ""
+
+        # Determine debit or credit based on calculated difference
+        if running_balance is not None:
+            diff = round(official_balance - running_balance, 2) if row['balance'] else amount
+            is_credit = diff > 0
+            signed_amount = abs(diff) if is_credit else -abs(diff)
+            calculated_balance = round(running_balance + signed_amount, 2)
+            running_balance = calculated_balance
+        else:
+            signed_amount = amount
+            calculated_balance = ""
+
+        calculated_transactions.append({
+            "date": row['date'],
+            "description": row['description'],
+            "amount": f"{signed_amount:.2f}",
+            "balance": row['balance'],
+            "calculated_balance": f"{calculated_balance:.2f}" if calculated_balance != "" else ""
+        })
+
     if preview:
-        return JSONResponse(content={"preview": transactions})
+        return JSONResponse(content={"preview": calculated_transactions})
 
     output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=["date", "description", "amount", "balance"])
+    writer = csv.DictWriter(output, fieldnames=["date", "description", "amount", "balance", "calculated_balance"])
     writer.writeheader()
-    for row in transactions:
+    for row in calculated_transactions:
         writer.writerow(row)
     output.seek(0)
     csv_string = output.getvalue()
 
     return JSONResponse(content={
         "success": True,
-        "transactions": transactions,
+        "transactions": calculated_transactions,
         "csvData": csv_string
     })
