@@ -88,11 +88,8 @@ async def parse_pdf(file: UploadFile = File(...), debug: bool = Query(False), pr
             debug_lines.extend([l["line"] for l in lines])
             all_lines.extend(lines)
 
-    if debug:
-        return PlainTextResponse("\n".join(debug_lines), media_type="text/plain")
-
     zones = classify_amounts_by_position(all_lines)
-debug_lines.append(f"Detected zones (X-coordinates): {zones}")
+    debug_lines.append(f"Detected zones (X-coordinates): {zones}")
     zone_info = {str(z): 0 for z in zones}
 
     current_transaction = None
@@ -135,6 +132,19 @@ debug_lines.append(f"Detected zones (X-coordinates): {zones}")
     calculated_transactions = []
     running_balance = previous_balance
     for row in transactions:
+        amount = float(row['amount']) if row['amount'] else 0.0
+        official_balance = float(row['balance']) if row['balance'] else ""
+        if running_balance is not None:
+            diff = round(official_balance - running_balance, 2) if row['balance'] else amount
+            signed_amount = diff
+            calculated_balance = round(running_balance + signed_amount, 2)
+            running_balance = calculated_balance
+        else:
+            signed_amount = amount
+            calculated_balance = ""
+
+        type_label = "credit" if signed_amount > 0 else ("debit" if signed_amount < 0 else "balance")
+
         x_pos = None
         for line in all_lines:
             if row['description'].split()[0] in line['line']:
@@ -144,31 +154,30 @@ debug_lines.append(f"Detected zones (X-coordinates): {zones}")
                         break
                 break
         zone_match = min(zones, key=lambda z: abs(z - x_pos)) if x_pos is not None else None
-        zone_info[str(zone_match)] += 1
-        
-            calculated_balance = round(running_balance + signed_amount, 2)
-            running_balance = calculated_balance
-        else:
-            signed_amount = amount
-            calculated_balance = ""
+        if zone_match is not None:
+            zone_info[str(zone_match)] += 1
 
-        type_label = "credit" if float(row['amount']) > 0 else ("debit" if float(row['amount']) < 0 else "balance")
         calculated_transactions.append({
             "date": row['date'],
             "description": row['description'],
             "amount": f"{signed_amount:.2f}",
             "balance": row['balance'],
-            "calculated_balance": f"{calculated_balance:.2f}" if calculated_balance != "" else ""
+            "calculated_balance": f"{calculated_balance:.2f}" if calculated_balance != "" else "",
+            "type": type_label
         })
 
     if preview:
-        return JSONResponse(content={"preview": calculated_transactions, "zones": zones, "zone_match_distribution": zone_info}))
+        return JSONResponse(content={
+            "preview": calculated_transactions,
+            "zones": zones,
+            "zone_match_distribution": zone_info
+        })
 
     output = io.StringIO()
     writer = csv.DictWriter(output, fieldnames=["date", "description", "amount", "balance", "calculated_balance", "type"])
     writer.writeheader()
     for row in calculated_transactions:
-        writer.writerow({**row, "type": type_label})
+        writer.writerow(row)
     output.seek(0)
     csv_string = output.getvalue()
 
