@@ -1,6 +1,5 @@
-
-from fastapi import FastAPI, File, UploadFile, Query
-from fastapi.responses import StreamingResponse, PlainTextResponse
+from fastapi import FastAPI, File, UploadFile, Query, HTTPException
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 import io
 import csv
@@ -8,14 +7,9 @@ import fitz  # PyMuPDF
 from datetime import datetime
 import re
 from collections import defaultdict
-# OCR fallback temporarily disabled
-# import pytesseract
-# from PIL import Image
-# import tempfile
 
 app = FastAPI()
 
-# Enable CORS for frontend calls
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -43,15 +37,6 @@ def extract_lines_by_y(page):
 
     return ordered_lines
 
-# OCR fallback disabled for now
-# def ocr_fallback(page):
-#     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-#         pix = page.get_pixmap(dpi=300)
-#         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-#         img.save(tmp.name, format="PNG")
-#         text = pytesseract.image_to_string(Image.open(tmp.name))
-#         return text.splitlines()
-
 def is_transaction_line(text_line):
     return re.match(r"^(\d{1,2}[\/\-\s]\d{1,2})", text_line)
 
@@ -75,7 +60,7 @@ def extract_fields(line, inferred_year):
     return None
 
 @app.post("/parse")
-async def parse_pdf(file: UploadFile = File(...), debug: bool = Query(False)):
+async def parse_pdf(file: UploadFile = File(...), debug: bool = Query(False), preview: bool = Query(False)):
     content = await file.read()
     transactions = []
     inferred_year = datetime.today().year
@@ -85,7 +70,6 @@ async def parse_pdf(file: UploadFile = File(...), debug: bool = Query(False)):
         current_transaction = None
         for page_number, page in enumerate(doc, start=1):
             lines = extract_lines_by_y(page)
-            # Skip OCR fallback for now
             if not lines:
                 continue
             debug_lines.append(f"--- Page {page_number} ---")
@@ -106,13 +90,23 @@ async def parse_pdf(file: UploadFile = File(...), debug: bool = Query(False)):
     if debug:
         return PlainTextResponse("\n".join(debug_lines), media_type="text/plain")
 
+    if not transactions:
+        raise HTTPException(status_code=400, detail="No transactions found in PDF")
+
+    if preview:
+        return JSONResponse(content={"preview": transactions})
+
+    # Build CSV string
     output = io.StringIO()
     writer = csv.DictWriter(output, fieldnames=["date", "description", "amount", "balance"])
     writer.writeheader()
     for row in transactions:
         writer.writerow(row)
     output.seek(0)
+    csv_string = output.getvalue()
 
-    return StreamingResponse(iter([output.getvalue()]), media_type="text/csv", headers={
-        "Content-Disposition": f"attachment; filename=parsed_{file.filename}.csv"
+    return JSONResponse(content={
+        "success": True,
+        "transactions": transactions,
+        "csvData": csv_string
     })
