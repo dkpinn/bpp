@@ -66,7 +66,11 @@ async def parse_pdf(file: UploadFile = File(...), debug: bool = Query(False), pr
     blocks = []
     current_block = []
     for line in all_lines:
+        x_start = line["positions"][0] if line["positions"] else 0
         first_word = line["line"].split()[0] if line["line"].split() else ""
+        # Exclude lines that start in the date column but are not actual dates
+        if x_start < 100 and not is_date(first_word):
+            continue
         if is_date(first_word):
             if current_block:
                 blocks.append(current_block)
@@ -90,9 +94,13 @@ async def parse_pdf(file: UploadFile = File(...), debug: bool = Query(False), pr
             continue
 
         description = match.group(2)
+        # Remove all numeric-looking fields from description
+        cleaned_description = re.sub(r"(?:\d[\d\s]{0,9}\.\d{2}){1,2}\s*$", "", description).strip()
+
         numbers = re.findall(r"[\d\s]+\.\d{2}", full_text)
         amount = ""
         balance = ""
+        balance_diff_error = ""
 
         if len(numbers) == 1:
             balance = numbers[0]
@@ -101,24 +109,33 @@ async def parse_pdf(file: UploadFile = File(...), debug: bool = Query(False), pr
             amount = numbers[-2]
             balance = numbers[-1]
 
-        amount = float(amount.replace(" ", "")) if amount else 0.0
-        balance = float(balance.replace(" ", "")) if balance else 0.0
+        try:
+            amount_val = float(amount.replace(" ", "")) if amount else 0.0
+        except:
+            amount_val = 0.0
+
+        try:
+            balance_val = float(balance.replace(" ", "")) if balance else 0.0
+        except:
+            balance_val = 0.0
 
         # Validate amount by comparing with balance difference
         if previous_balance is not None:
-            calc_amount = round(balance - previous_balance, 2)
-            if abs(calc_amount - amount) > 0.01:
-                amount = calc_amount
+            calc_amount = round(balance_val - previous_balance, 2)
+            if abs(calc_amount - amount_val) > 0.01:
+                balance_diff_error = f"Expected {calc_amount:.2f}, got {amount_val:.2f}"
+                amount_val = calc_amount
 
-        previous_balance = balance
+        previous_balance = balance_val
 
         transactions.append({
             "date": date,
-            "description": description.strip(),
-            "amount": f"{amount:.2f}",
-            "balance": f"{balance:.2f}",
-            "calculated_balance": f"{balance:.2f}",
-            "type": "credit" if amount > 0 else ("debit" if amount < 0 else "balance")
+            "description": cleaned_description,
+            "amount": f"{amount_val:.2f}",
+            "balance": f"{balance_val:.2f}",
+            "calculated_balance": f"{balance_val:.2f}",
+            "type": "credit" if amount_val > 0 else ("debit" if amount_val < 0 else "balance"),
+            "balance_diff_error": balance_diff_error
         })
 
     if not transactions:
@@ -128,7 +145,7 @@ async def parse_pdf(file: UploadFile = File(...), debug: bool = Query(False), pr
         return JSONResponse(content={"preview": transactions})
 
     output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=["date", "description", "amount", "balance", "calculated_balance", "type"])
+    writer = csv.DictWriter(output, fieldnames=["date", "description", "amount", "balance", "calculated_balance", "type", "balance_diff_error"])
     writer.writeheader()
     for row in transactions:
         writer.writerow(row)
