@@ -62,13 +62,11 @@ async def parse_pdf(file: UploadFile = File(...), debug: bool = Query(False), pr
             debug_lines.extend([l["line"] for l in lines])
             all_lines.extend(lines)
 
-    # Identify lines that start with a date (i.e., start of new transaction block)
     blocks = []
     current_block = []
     for line in all_lines:
         x_start = line["positions"][0] if line["positions"] else 0
         first_word = line["line"].split()[0] if line["line"].split() else ""
-        # Exclude lines that start in the date column but are not actual dates
         if x_start < 100 and not is_date(first_word):
             continue
         if is_date(first_word):
@@ -83,7 +81,7 @@ async def parse_pdf(file: UploadFile = File(...), debug: bool = Query(False), pr
 
     for block in blocks:
         full_text = " ".join([line["line"] for line in block])
-        match = re.match(r"^(\d{1,2}[\/\-\s]\d{1,2}[\/\-\s]\d{2,4})\s+(.*)", full_text)
+        match = re.match(r"^(\d{1,2}[\/\-\s]\d{1,2}[\/\-\s]\d{2,4})", block[0]["line"])
         if not match:
             continue
 
@@ -93,9 +91,12 @@ async def parse_pdf(file: UploadFile = File(...), debug: bool = Query(False), pr
         except:
             continue
 
-        description = match.group(2)
-        # Remove all numeric-looking fields from description
-        cleaned_description = re.sub(r"(?:\d[\d\s]{0,9}\.\d{2}){1,2}\s*$", "", description).strip()
+        description_parts = []
+        for line in block:
+            left_column_words = [word for x, word in line["xmap"] if x < 300 and not is_amount(word)]
+            description_parts.append(" ".join(left_column_words))
+
+        cleaned_description = " ".join(description_parts).strip()
 
         numbers = re.findall(r"[\d\s]+\.\d{2}", full_text)
         amount = ""
@@ -119,7 +120,6 @@ async def parse_pdf(file: UploadFile = File(...), debug: bool = Query(False), pr
         except:
             balance_val = 0.0
 
-        # Validate amount by comparing with balance difference
         if previous_balance is not None:
             calc_amount = round(balance_val - previous_balance, 2)
             if abs(calc_amount - amount_val) > 0.01:
