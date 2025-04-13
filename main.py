@@ -1,12 +1,12 @@
 from fastapi import FastAPI, File, UploadFile, Query, HTTPException
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import io
 import csv
 import fitz  # PyMuPDF
 from datetime import datetime
 import re
-from collections import defaultdict, Counter
+from collections import defaultdict
 
 app = FastAPI()
 
@@ -48,12 +48,27 @@ def is_date(text):
 def is_amount(text):
     return re.match(r"^[\d\s]+\.\d{2}$", text)
 
+# Define column zones per bank
+COLUMN_ZONES = {
+    "absa": {
+        "description": (95, 305),
+        "debit": (310, 390),
+        "credit": (395, 470),
+        "balance": (475, 999)
+    },
+    # Future banks can be added here
+}
+
 @app.post("/parse")
-async def parse_pdf(file: UploadFile = File(...), debug: bool = Query(False), preview: bool = Query(False)):
+async def parse_pdf(file: UploadFile = File(...), bank: str = Query("absa"), debug: bool = Query(False), preview: bool = Query(False)):
     content = await file.read()
     debug_lines = []
     all_lines = []
     transactions = []
+
+    zones = COLUMN_ZONES.get(bank.lower())
+    if not zones:
+        raise HTTPException(status_code=400, detail=f"Unsupported bank layout: {bank}")
 
     with fitz.open(stream=content, filetype="pdf") as doc:
         for page_number, page in enumerate(doc, start=1):
@@ -80,7 +95,6 @@ async def parse_pdf(file: UploadFile = File(...), debug: bool = Query(False), pr
     previous_balance = None
 
     for block in blocks:
-        full_text = " ".join([line["line"] for line in block])
         match = re.match(r"^(\d{1,2}[\/\-\s]\d{1,2}[\/\-\s]\d{2,4})", block[0]["line"])
         if not match:
             continue
@@ -92,33 +106,34 @@ async def parse_pdf(file: UploadFile = File(...), debug: bool = Query(False), pr
             continue
 
         description_parts = []
-        for line in block:
-            left_column_words = [word for x, word in line["xmap"] if x < 300 and not is_amount(word)]
-            description_parts.append(" ".join(left_column_words))
+        debit_amount = None
+        credit_amount = None
+        balance_amount = None
 
-        cleaned_description = " ".join(description_parts).strip()
+        for i, line in enumerate(block):
+            for j, (x, word) in enumerate(line["xmap"]):
+                word_clean = word.replace(" ", "")
+                if i == 0 and j == 0 and is_date(word):
+                    continue
+                if zones["description"][0] <= x < zones["description"][1] and not is_amount(word):
+                    description_parts.append(word)
+                elif zones["debit"][0] <= x < zones["debit"][1] and is_amount(word):
+                    debit_amount = float(word_clean)
+                elif zones["credit"][0] <= x < zones["credit"][1] and is_amount(word):
+                    credit_amount = float(word_clean)
+                elif x >= zones["balance"][0] and is_amount(word):
+                    balance_amount = float(word_clean)
 
-        numbers = re.findall(r"[\d\s]+\.\d{2}", full_text)
-        amount = ""
-        balance = ""
+        description = " ".join(description_parts).strip()
+        amount_val = 0.0
+
+        if credit_amount is not None:
+            amount_val = credit_amount
+        elif debit_amount is not None:
+            amount_val = -debit_amount
+
+        balance_val = balance_amount if balance_amount is not None else (previous_balance if previous_balance is not None else 0.0)
         balance_diff_error = ""
-
-        if len(numbers) == 1:
-            balance = numbers[0]
-            amount = "0.00"
-        elif len(numbers) >= 2:
-            amount = numbers[-2]
-            balance = numbers[-1]
-
-        try:
-            amount_val = float(amount.replace(" ", "")) if amount else 0.0
-        except:
-            amount_val = 0.0
-
-        try:
-            balance_val = float(balance.replace(" ", "")) if balance else 0.0
-        except:
-            balance_val = 0.0
 
         if previous_balance is not None:
             calc_amount = round(balance_val - previous_balance, 2)
@@ -130,7 +145,7 @@ async def parse_pdf(file: UploadFile = File(...), debug: bool = Query(False), pr
 
         transactions.append({
             "date": date,
-            "description": cleaned_description,
+            "description": description,
             "amount": f"{amount_val:.2f}",
             "balance": f"{balance_val:.2f}",
             "calculated_balance": f"{balance_val:.2f}",
