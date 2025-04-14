@@ -19,9 +19,10 @@ PARSING_RULES = {
             "year_optional": "Y"
         },
         "description": {
-            "multiline": true
-        }
-    },  # <-- This comma was missing
+            "multiline": True
+        },
+        "multiline_description": True  # Use this flag in main.py to accumulate multiline descriptions
+    },
     # Add more configurations like:
     # "ABSA_CREDIT_CARD_STATEMENT": {...},
     # "STANDARD_BANK_CHEQUE_ACCOUNT_STATEMENT": {...},
