@@ -43,52 +43,39 @@ def extract_lines_by_y(page):
 
     return ordered_lines
 
-def normalize_amount(text, sep, trail_neg):
-    num = text.replace(sep, '').replace(',', '').strip()
-    if trail_neg == "Y" and num.endswith("-"):
-        num = "-" + num[:-1]
-    return float(num)
+def is_date(text):
+    return re.match(r"^\d{1,2}[\/\-\s]\d{1,2}[\/\-\s]\d{2,4}$", text)
 
-def match_date(text, formats):
-    for fmt in formats:
-        try:
-            return datetime.strptime(text.replace(" ", "/"), fmt).strftime("%Y-%m-%d")
-        except:
-            continue
-    return None
+def is_amount(text):
+    return re.match(r"^[\d\s]+\.\d{2}$", text)
+
+def clean_description(desc, amount_candidates):
+    for a in amount_candidates:
+        if a in desc:
+            desc = desc.replace(a, "")
+    return re.sub(r"\s+", " ", desc).strip()
 
 @app.post("/parse")
-async def parse_pdf(
-    file: UploadFile = File(...), 
-    bank: str = Query("ABSA"), 
-    account_type: str = Query("CHEQUE_ACCOUNT_STATEMENT"), 
-    preview: bool = Query(False)):
-
+async def parse_pdf(file: UploadFile = File(...), bank: str = Query("ABSA"), account_type: str = Query("CHEQUE_ACCOUNT_STATEMENT"), preview: bool = Query(False)):
     key = f"{bank.upper()}_{account_type.upper()}"
     rules = PARSING_RULES.get(key)
     if not rules:
         raise HTTPException(status_code=400, detail=f"Unsupported bank/account type configuration: {key}")
 
     content = await file.read()
-    transactions = []
-    all_lines = []
-
     with fitz.open(stream=content, filetype="pdf") as doc:
+        all_lines = []
         for page in doc:
-            lines = extract_lines_by_y(page)
-            all_lines.extend(lines)
+            all_lines.extend(extract_lines_by_y(page))
 
-    column_zones = rules["column_zones"]
-    prev_balance = None
-    current_block = []
     blocks = []
-
+    current_block = []
     for line in all_lines:
         x_start = line["positions"][0] if line["positions"] else 0
         first_word = line["line"].split()[0] if line["line"].split() else ""
-        if x_start < rules["date_x_threshold"] and not re.match(r"\d{1,2}[\-/\s]\d{1,2}([\-/\s]\d{2,4})?", first_word):
+        if x_start < rules["date_x_threshold"] and not is_date(first_word):
             continue
-        if re.match(r"\d{1,2}[\-/\s]\d{1,2}([\-/\s]\d{2,4})?", first_word):
+        if is_date(first_word):
             if current_block:
                 blocks.append(current_block)
                 current_block = []
@@ -96,49 +83,63 @@ async def parse_pdf(
     if current_block:
         blocks.append(current_block)
 
+    transactions = []
+    previous_balance = None
+    zones = rules["column_zones"]
+
     for block in blocks:
-        date_str = match_date(block[0]["line"].split()[0], rules["date_format"]["formats"])
-        if not date_str:
+        match = re.match(r"^(\d{1,2}[\/\-\s]\d{1,2}[\/\-\s]\d{2,4})", block[0]["line"])
+        if not match:
             continue
 
-        desc_parts = []
-        debit, credit, balance = None, None, None
+        date_str = match.group(1).replace(" ", "/").replace("-", "/")
+        try:
+            date = datetime.strptime(date_str, "%d/%m/%Y").strftime("%Y-%m-%d")
+        except:
+            continue
 
+        desc_parts, debit, credit, balance = [], None, None, None
         for i, line in enumerate(block):
-            for x, word in line["xmap"]:
-                clean = word.replace(" ", "").replace(",", "")
-                if i == 0 and re.match(r"\d{1,2}[\-/\s]\d{1,2}([\-/\s]\d{2,4})?", word):
+            for j, (x, word) in enumerate(line["xmap"]):
+                word_clean = word.replace(" ", "")
+                if i == 0 and j == 0 and is_date(word):
                     continue
-                if column_zones["description"][0] <= x < column_zones["description"][1] and not re.match(r"^[\d\s]+\.\d{2}$", word):
+                if zones["description"][0] <= x < zones["description"][1] and not is_amount(word):
                     desc_parts.append(word)
-                elif column_zones["debit"][0] <= x < column_zones["debit"][1] and re.match(r"^[\d\s\-,]+\.\d{2}-?", word):
-                    debit = normalize_amount(word, rules["amount_format"]["thousands_separator"], rules["amount_format"]["negative_trailing"])
-                elif column_zones["credit"][0] <= x < column_zones["credit"][1] and re.match(r"^[\d\s\-,]+\.\d{2}-?", word):
-                    credit = normalize_amount(word, rules["amount_format"]["thousands_separator"], rules["amount_format"]["negative_trailing"])
-                elif x >= column_zones["balance"][0] and re.match(r"^[\d\s\-,]+\.\d{2}-?", word):
-                    balance = normalize_amount(word, rules["amount_format"]["thousands_separator"], rules["amount_format"]["negative_trailing"])
+                elif zones["debit"][0] <= x < zones["debit"][1] and is_amount(word):
+                    debit = float(word_clean.replace(",", "").replace(" ", ""))
+                elif zones["credit"][0] <= x < zones["credit"][1] and is_amount(word):
+                    credit = float(word_clean.replace(",", "").replace(" ", ""))
+                elif x >= zones["balance"][0] and is_amount(word):
+                    balance = float(word_clean.replace(",", "").replace(" ", ""))
 
-        description = " ".join(desc_parts).strip()
-        amount = credit if credit is not None else (-debit if debit is not None else 0.0)
-        bal_val = balance if balance is not None else (prev_balance if prev_balance is not None else 0.0)
+        desc = " ".join(desc_parts).strip()
+        raw_amounts = re.findall(r"\d[\d\s]*\.\d{2}-?", desc)
+        desc = clean_description(desc, raw_amounts)
 
-        error = ""
-        if prev_balance is not None:
-            expected_amt = round(bal_val - prev_balance, 2)
-            if abs(expected_amt - amount) > 0.01:
-                error = f"Expected {expected_amt:.2f}, got {amount:.2f}"
-                amount = expected_amt
+        amount_val = 0.0
+        if credit is not None:
+            amount_val = credit
+        elif debit is not None:
+            amount_val = -debit
 
-        prev_balance = bal_val
+        balance_val = balance if balance is not None else (previous_balance if previous_balance is not None else 0.0)
+        balance_diff_error = ""
+        if previous_balance is not None:
+            calc_amount = round(balance_val - previous_balance, 2)
+            if abs(calc_amount - amount_val) > 0.01:
+                balance_diff_error = f"Expected {calc_amount:.2f}, got {amount_val:.2f}"
+                amount_val = calc_amount
+        previous_balance = balance_val
 
         transactions.append({
-            "date": date_str,
-            "description": description,
-            "amount": f"{amount:.2f}",
-            "balance": f"{bal_val:.2f}",
-            "calculated_balance": f"{bal_val:.2f}",
-            "type": "credit" if amount > 0 else ("debit" if amount < 0 else "balance"),
-            "balance_diff_error": error
+            "date": date,
+            "description": desc,
+            "amount": f"{amount_val:.2f}",
+            "balance": f"{balance_val:.2f}",
+            "calculated_balance": f"{balance_val:.2f}",
+            "type": "credit" if amount_val > 0 else ("debit" if amount_val < 0 else "balance"),
+            "balance_diff_error": balance_diff_error
         })
 
     if not transactions:
