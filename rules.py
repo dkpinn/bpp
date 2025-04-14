@@ -12,7 +12,7 @@ PARSING_RULES = {
         "amount_format": {
             "thousands_separator": " ",
             "decimal_separator": ".",
-            "negative_trailing": "Y"
+            "negative_trailing": "N"
         },
         "date_format": {
             "formats": ["%d/%m/%Y", "%m %d"],
