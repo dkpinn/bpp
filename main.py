@@ -7,6 +7,7 @@ import fitz  # PyMuPDF
 from datetime import datetime
 import re
 from collections import defaultdict
+from rules import PARSING_RULES
 
 app = FastAPI()
 
@@ -48,27 +49,25 @@ def is_date(text):
 def is_amount(text):
     return re.match(r"^[\d\s]+\.\d{2}$", text)
 
-# Define column zones per bank
-COLUMN_ZONES = {
-    "absa": {
-        "description": (95, 305),
-        "debit": (310, 390),
-        "credit": (395, 470),
-        "balance": (475, 999)
-    },
-    # Future banks can be added here
-}
-
 @app.post("/parse")
-async def parse_pdf(file: UploadFile = File(...), bank: str = Query("absa"), debug: bool = Query(False), preview: bool = Query(False)):
+async def parse_pdf(
+    file: UploadFile = File(...),
+    bank: str = Query("absa"),
+    account_type: str = Query("Cheque Account Statement"),
+    debug: bool = Query(False),
+    preview: bool = Query(False)):
+
+    key = f"{bank.upper()}_{account_type.upper().replace(' ', '_')}"
+    rules = PARSING_RULES.get(key)
+    if not rules:
+        raise HTTPException(status_code=400, detail=f"Unsupported bank/account type configuration: {key}")
+
+    zones = rules["column_zones"]
+
     content = await file.read()
     debug_lines = []
     all_lines = []
     transactions = []
-
-    zones = COLUMN_ZONES.get(bank.lower())
-    if not zones:
-        raise HTTPException(status_code=400, detail=f"Unsupported bank layout: {bank}")
 
     with fitz.open(stream=content, filetype="pdf") as doc:
         for page_number, page in enumerate(doc, start=1):
@@ -82,7 +81,7 @@ async def parse_pdf(file: UploadFile = File(...), bank: str = Query("absa"), deb
     for line in all_lines:
         x_start = line["positions"][0] if line["positions"] else 0
         first_word = line["line"].split()[0] if line["line"].split() else ""
-        if x_start < 100 and not is_date(first_word):
+        if x_start < rules["date_x_threshold"] and not is_date(first_word):
             continue
         if is_date(first_word):
             if current_block:
