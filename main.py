@@ -143,6 +143,12 @@ async def parse_pdf(file: UploadFile = File(...), bank: str = Query("absa"), deb
 
         previous_balance = balance_val
 
+        # Clean amount/balance text if mistakenly captured in description
+        if f"{abs(amount_val):,.2f}" in description:
+            description = description.replace(f"{abs(amount_val):,.2f}", "").strip()
+        if f"{balance_val:,.2f}" in description:
+            description = description.replace(f"{balance_val:,.2f}", "").strip()
+
         transactions.append({
             "date": date,
             "description": description,
