@@ -2,9 +2,9 @@
 
 PARSING_RULES = {
     "ABSA_CHEQUE_ACCOUNT_STATEMENT": {
-        "date_x_threshold": 95,
+        "date_x_threshold": 90,
         "column_zones": {
-            "description": (95, 305),
+            "description": (90, 305),
             "debit": (310, 390),
             "credit": (395, 470),
             "balance": (475, 999)
