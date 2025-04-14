@@ -21,7 +21,16 @@ PARSING_RULES = {
         "description": {
             "multiline": True
         },
-        "multiline_description": True  # To implement this, update main.py so that when parsing blocks, lines without a date but within the description x-range are appended to the previous transaction’s description
+        "multiline_description": True,
+        "parse_rules_applied": [
+            "x-coordinate zone-based classification",
+            "multiline description parsing",
+            "debit/credit/balance alignment checks",
+            "amount format normalization",
+            "balance delta validation",
+            "support for missing year in date",
+            "handling of trailing dash for negatives"
+        ]
     },
     # Add more configurations like:
     # "ABSA_CREDIT_CARD_STATEMENT": {...},
