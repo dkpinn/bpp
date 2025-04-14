@@ -2,9 +2,9 @@
 
 PARSING_RULES = {
     "ABSA_CHEQUE_ACCOUNT_STATEMENT": {
-        "date_x_threshold": 90,
+        "date_x_threshold": 95,
         "column_zones": {
-            "description": (90, 305),
+            "description": (95, 305),
             "debit": (310, 390),
             "credit": (395, 470),
             "balance": (475, 999)
@@ -12,7 +12,7 @@ PARSING_RULES = {
         "amount_format": {
             "thousands_separator": " ",
             "decimal_separator": ".",
-            "negative_trailing": "N"
+            "negative_trailing": "Y"
         },
         "date_format": {
             "formats": ["%d/%m/%Y", "%m %d"],
@@ -29,7 +29,8 @@ PARSING_RULES = {
             "amount format normalization",
             "balance delta validation",
             "support for missing year in date",
-            "handling of trailing dash for negatives"
+            "handling of trailing dash for negatives",
+            "remove amount/balance from description when wrongly included"
         ]
     },
     # Add more configurations like:
