@@ -21,7 +21,7 @@ PARSING_RULES = {
         "description": {
             "multiline": True
         },
-        "multiline_description": True  # Use this flag in main.py to accumulate multiline descriptions
+        "multiline_description": True  # To implement this, update main.py so that when parsing blocks, lines without a date but within the description x-range are appended to the previous transaction’s description
     },
     # Add more configurations like:
     # "ABSA_CREDIT_CARD_STATEMENT": {...},
