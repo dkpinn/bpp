@@ -1,6 +1,6 @@
 # main.py
 
-from fastapi import FastAPI, File, UploadFile, Query, HTTPException
+from fastapi import FastAPI, File, UploadFile, Query, HTTPException, Form
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import io
@@ -56,20 +56,20 @@ def is_date(text, formats):
     return False
 
 def is_amount(text, thousands_sep, decimal_sep):
-    clean = text.replace(thousands_sep, '').replace(decimal_sep, '.')
+    clean = text.replace('\u00A0', '').replace('\u2009', '').replace(' ', '').replace(thousands_sep, '').replace(decimal_sep, '.')
     return re.match(r"^-?\d+\.\d{2}$", clean)
 
 def normalize_amount_string(s, thousands_sep, decimal_sep, trailing_neg):
-    s = s.replace(thousands_sep, '').replace(decimal_sep, '.')
-    s = s.replace('\u00A0', '').replace('\u2009', '')
+    s = s.replace('\u00A0', '').replace('\u2009', '').replace(' ', '').replace(thousands_sep, '')
+    s = s.replace(decimal_sep, '.')
     if trailing_neg and s.endswith("-"):
         s = '-' + s[:-1]
     return s
 
 @app.post("/parse")
 async def parse_pdf(
-    file: UploadFile = File(...),
-    preview: bool = Query(False)
+    preview: bool = Query(False),
+    file: UploadFile = File(...)
 ):
     content = await file.read()
 
