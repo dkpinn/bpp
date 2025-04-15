@@ -60,8 +60,8 @@ def is_amount(text, thousands_sep, decimal_sep):
     return re.match(r"^-?\d+\.\d{2}$", clean)
 
 def normalize_amount_string(s, thousands_sep, decimal_sep, trailing_neg):
-    s = ''.join(c for c in s if not unicodedata.category(c).startswith("Z"))
     s = s.replace(thousands_sep, '').replace(decimal_sep, '.')
+    s = s.replace('\u00A0', '').replace('\u2009', '')
     if trailing_neg and s.endswith("-"):
         s = '-' + s[:-1]
     return s
