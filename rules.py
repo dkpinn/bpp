@@ -6,8 +6,8 @@ PARSING_RULES = {
         "column_zones": {
             "description": (95, 295),
              "debit": (295, 425),   # widened
-            "credit": (425, 515),  # widened
-            "balance": (520, 999)
+            "credit": (425, 500),  # widened
+            "balance": (500, 999)
         },
         "amount_format": {
             "thousands_separator": " ",
