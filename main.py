@@ -76,6 +76,11 @@ def safe_parse_amount(text, thousands_sep, decimal_sep, trailing_neg):
         print(f"Failed to convert '{text}' -> '{normalized}' to float: {e}")
         return None
 
+def combine_column_values(line_map, zone):
+    values = [word for x, word in line_map if zone[0] <= x < zone[1] and re.search(r'\d', word)]
+    combined = ''.join(values)
+    return combined.strip() if combined else None
+
 @app.post("/parse")
 async def parse_pdf(
     preview: bool = Query(False),
@@ -149,9 +154,9 @@ async def parse_pdf(
             continue
 
         description_parts = []
-        debit_text = None
-        credit_text = None
-        balance_text = None
+        debit_text = ""
+        credit_text = ""
+        balance_text = ""
 
         for i, line in enumerate(block):
             for j, (x, word) in enumerate(line["xmap"]):
@@ -159,15 +164,9 @@ async def parse_pdf(
                     continue
                 if zones["description"][0] <= x < zones["description"][1]:
                     description_parts.append(word)
-                elif zones["debit"][0] <= x < zones["debit"][1]:
-                    print(f"Raw debit match: x={x}, word='{word}'")
-                    debit_text = word
-                elif zones["credit"][0] <= x < zones["credit"][1]:
-                    print(f"Raw credit match: x={x}, word='{word}'")
-                    credit_text = word
-                elif x >= zones["balance"][0]:
-                    print(f"Raw balance match: x={x}, word='{word}'")
-                    balance_text = word
+            debit_text += combine_column_values(line["xmap"], zones["debit"])
+            credit_text += combine_column_values(line["xmap"], zones["credit"])
+            balance_text += combine_column_values(line["xmap"], zones["balance"])
 
         debit_amount = safe_parse_amount(debit_text, thousands_sep, decimal_sep, trailing_neg)
         credit_amount = safe_parse_amount(credit_text, thousands_sep, decimal_sep, trailing_neg)
