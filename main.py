@@ -61,12 +61,25 @@ def is_amount(text, thousands_sep, decimal_sep):
 @app.post("/parse")
 async def parse_pdf(
     file: UploadFile = File(...),
-    bank: str = Query(...),
-    account_type: str = Query(...),
     preview: bool = Query(False)
 ):
     content = await file.read()
-    key = f"{bank.upper()}_{account_type.upper().replace(' ', '_')}"
+
+    detected_bank = None
+    detected_account_type = None
+
+    with fitz.open(stream=content, filetype="pdf") as doc:
+        for page in doc:
+            text = page.get_text()
+            if "ABSA Bank" in text and "Cheque Account Statement" in text:
+                detected_bank = "ABSA"
+                detected_account_type = "Cheque Account Statement"
+                break
+
+    if not detected_bank or not detected_account_type:
+        raise HTTPException(status_code=400, detail="Unable to detect bank/account type in PDF")
+
+    key = f"{detected_bank.upper()}_{detected_account_type.upper().replace(' ', '_')}"
     rules = PARSING_RULES.get(key)
 
     if not rules:
