@@ -58,7 +58,7 @@ def is_date(text, formats):
 def normalize_amount_string(s, thousands_sep, decimal_sep, trailing_neg):
     s = unicodedata.normalize("NFKD", s)
     s = s.replace('\u00A0', '').replace('\u2009', '').replace('\u202F', '')
-    s = s.replace(thousands_sep, '').replace(' ', '')  # Remove thousands separator and spaces
+    s = s.replace(thousands_sep, '').replace(' ', '')
     s = s.replace(decimal_sep, '.')
     if trailing_neg and s.endswith("-"):
         s = '-' + s[:-1]
@@ -79,7 +79,7 @@ def safe_parse_amount(text, thousands_sep, decimal_sep, trailing_neg):
 def combine_column_values(line_map, zone):
     values = [word for x, word in line_map if zone[0] <= x < zone[1] and re.search(r'\d', word)]
     combined = ''.join(values)
-    return combined.strip() if combined else None
+    return combined.strip() if combined else ''
 
 @app.post("/parse")
 async def parse_pdf(
