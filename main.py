@@ -9,6 +9,7 @@ import fitz  # PyMuPDF
 from datetime import datetime
 import re
 from collections import defaultdict
+import unicodedata
 from rules import PARSING_RULES
 
 app = FastAPI()
@@ -57,6 +58,13 @@ def is_date(text, formats):
 def is_amount(text, thousands_sep, decimal_sep):
     clean = text.replace(thousands_sep, '').replace(decimal_sep, '.')
     return re.match(r"^-?\d+\.\d{2}$", clean)
+
+def normalize_amount_string(s, thousands_sep, decimal_sep, trailing_neg):
+    s = ''.join(c for c in s if not unicodedata.category(c).startswith("Z"))
+    s = s.replace(thousands_sep, '').replace(decimal_sep, '.')
+    if trailing_neg and s.endswith("-"):
+        s = '-' + s[:-1]
+    return s
 
 @app.post("/parse")
 async def parse_pdf(
@@ -137,9 +145,7 @@ async def parse_pdf(
 
         for i, line in enumerate(block):
             for j, (x, word) in enumerate(line["xmap"]):
-                word_clean = word.replace(thousands_sep, '').replace(decimal_sep, '.')
-                if trailing_neg and word_clean.endswith("-"):
-                    word_clean = '-' + word_clean[:-1]
+                word_clean = normalize_amount_string(word, thousands_sep, decimal_sep, trailing_neg)
                 if i == 0 and j == 0 and is_date(word, date_formats):
                     continue
                 if zones["description"][0] <= x < zones["description"][1] and not is_amount(word, thousands_sep, decimal_sep):
