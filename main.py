@@ -55,6 +55,19 @@ def is_date(text, formats):
             continue
     return False
 
+AMOUNT_PATTERN = re.compile(
+    r"""
+    ^
+    -?[   \s\d,]*
+    [.,]?\d{0,2}
+    -?$
+    """,
+    re.VERBOSE
+)
+
+def is_valid_amount(text: str) -> bool:
+    return bool(AMOUNT_PATTERN.match(text))
+
 def normalize_amount_string(s, thousands_sep, decimal_sep, trailing_neg):
     s = unicodedata.normalize("NFKD", s)
     s = s.replace('\u00A0', '').replace('\u2009', '').replace('\u202F', '').replace(' ', '').replace(thousands_sep, '')
@@ -62,6 +75,15 @@ def normalize_amount_string(s, thousands_sep, decimal_sep, trailing_neg):
     if trailing_neg and s.endswith("-"):
         s = '-' + s[:-1]
     return s
+
+def safe_parse_amount(text, thousands_sep, decimal_sep, trailing_neg):
+    if not text or not is_valid_amount(text):
+        return None
+    try:
+        normalized = normalize_amount_string(text, thousands_sep, decimal_sep, trailing_neg)
+        return float(normalized)
+    except ValueError:
+        return None
 
 @app.post("/parse")
 async def parse_pdf(
@@ -153,9 +175,9 @@ async def parse_pdf(
                 elif x >= zones["balance"][0]:
                     balance_text = word
 
-        debit_amount = float(normalize_amount_string(debit_text, thousands_sep, decimal_sep, trailing_neg)) if debit_text else None
-        credit_amount = float(normalize_amount_string(credit_text, thousands_sep, decimal_sep, trailing_neg)) if credit_text else None
-        balance_amount = float(normalize_amount_string(balance_text, thousands_sep, decimal_sep, trailing_neg)) if balance_text else None
+        debit_amount = safe_parse_amount(debit_text, thousands_sep, decimal_sep, trailing_neg)
+        credit_amount = safe_parse_amount(credit_text, thousands_sep, decimal_sep, trailing_neg)
+        balance_amount = safe_parse_amount(balance_text, thousands_sep, decimal_sep, trailing_neg)
 
         description = " ".join(description_parts).strip()
         amount_val = 0.0
