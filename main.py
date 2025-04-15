@@ -55,29 +55,17 @@ def is_date(text, formats):
             continue
     return False
 
-AMOUNT_PATTERN = re.compile(
-    r"""
-    ^
-    -?[   \s\d,]*
-    [.,]?\d{0,2}
-    -?$
-    """,
-    re.VERBOSE
-)
-
-def is_valid_amount(text: str) -> bool:
-    return bool(AMOUNT_PATTERN.match(text))
-
 def normalize_amount_string(s, thousands_sep, decimal_sep, trailing_neg):
     s = unicodedata.normalize("NFKD", s)
-    s = s.replace('\u00A0', '').replace('\u2009', '').replace('\u202F', '').replace(' ', '').replace(thousands_sep, '')
+    s = s.replace('\u00A0', '').replace('\u2009', '').replace('\u202F', '')
+    s = s.replace(thousands_sep, '').replace(' ', '')
     s = s.replace(decimal_sep, '.')
     if trailing_neg and s.endswith("-"):
         s = '-' + s[:-1]
     return s
 
 def safe_parse_amount(text, thousands_sep, decimal_sep, trailing_neg):
-    if not text or not is_valid_amount(text):
+    if not text:
         return None
     try:
         normalized = normalize_amount_string(text, thousands_sep, decimal_sep, trailing_neg)
