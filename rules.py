@@ -1,15 +1,13 @@
 # rules.py
 
-# rules.py
-
 PARSING_RULES = {
     "ABSA_CHEQUE_ACCOUNT_STATEMENT": {
         "date_x_threshold": 95,
         "column_zones": {
-            "description": (90, 290),
-             "debit": (290, 405),   # widened
-            "credit": (405, 430),  # widened
-            "balance": (430, 999)
+            "description": (85, 295),
+            "debit": (330, 450),
+            "credit": (455, 510),
+            "balance": (515, 999)
         },
         "amount_format": {
             "thousands_separator": " ",
@@ -17,8 +15,8 @@ PARSING_RULES = {
             "negative_trailing": "N"
         },
         "date_format": {
-            "formats": ["%d/%m/%Y", "%m %d"],
-            "year_optional": "Y"
+            "formats": ["%d/%m/%Y"],
+            "year_optional": "N"
         },
         "description": {
             "multiline": True
