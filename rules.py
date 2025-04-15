@@ -5,9 +5,9 @@ PARSING_RULES = {
         "date_x_threshold": 95,
         "column_zones": {
             "description": (95, 305),
-            "debit": (310, 390),
-            "credit": (395, 470),
-            "balance": (475, 999)
+             "debit": (310, 410),   # widened
+            "credit": (412, 510),  # widened
+            "balance": (512, 999)
         },
         "amount_format": {
             "thousands_separator": " ",
