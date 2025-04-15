@@ -1,3 +1,5 @@
+# main.py
+
 from fastapi import FastAPI, File, UploadFile, Query, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -43,39 +45,58 @@ def extract_lines_by_y(page):
 
     return ordered_lines
 
-def is_date(text):
-    return re.match(r"^\d{1,2}[\/\-\s]\d{1,2}[\/\-\s]\d{2,4}$", text)
+def is_date(text, formats):
+    for fmt in formats:
+        try:
+            datetime.strptime(text.replace(" ", "/").replace("-", "/"), fmt)
+            return True
+        except:
+            continue
+    return False
 
-def is_amount(text):
-    return re.match(r"^[\d\s]+\.\d{2}$", text)
-
-def clean_description(desc, amount_candidates):
-    for a in amount_candidates:
-        if a in desc:
-            desc = desc.replace(a, "")
-    return re.sub(r"\s+", " ", desc).strip()
+def is_amount(text, thousands_sep, decimal_sep):
+    clean = text.replace(thousands_sep, '').replace(decimal_sep, '.')
+    return re.match(r"^-?\d+\.\d{2}$", clean)
 
 @app.post("/parse")
-async def parse_pdf(file: UploadFile = File(...), bank: str = Query("ABSA"), account_type: str = Query("CHEQUE_ACCOUNT_STATEMENT"), preview: bool = Query(False)):
-    key = f"{bank.upper()}_{account_type.upper()}"
+async def parse_pdf(
+    file: UploadFile = File(...),
+    bank: str = Query(...),
+    account_type: str = Query(...),
+    preview: bool = Query(False)
+):
+    content = await file.read()
+    key = f"{bank.upper()}_{account_type.upper().replace(' ', '_')}"
     rules = PARSING_RULES.get(key)
+
     if not rules:
         raise HTTPException(status_code=400, detail=f"Unsupported bank/account type configuration: {key}")
 
-    content = await file.read()
+    zones = rules["column_zones"]
+    thousands_sep = rules["amount_format"]["thousands_separator"]
+    decimal_sep = rules["amount_format"]["decimal_separator"]
+    trailing_neg = rules["amount_format"]["negative_trailing"] == "Y"
+    date_formats = rules["date_format"]["formats"]
+    multiline_desc = rules["description"].get("multiline", True)
+    date_x_threshold = rules.get("date_x_threshold", 95)
+
+    transactions = []
+    all_lines = []
+
     with fitz.open(stream=content, filetype="pdf") as doc:
-        all_lines = []
         for page in doc:
-            all_lines.extend(extract_lines_by_y(page))
+            lines = extract_lines_by_y(page)
+            all_lines.extend(lines)
 
     blocks = []
     current_block = []
+
     for line in all_lines:
         x_start = line["positions"][0] if line["positions"] else 0
         first_word = line["line"].split()[0] if line["line"].split() else ""
-        if x_start < rules["date_x_threshold"] and not is_date(first_word):
+        if x_start < date_x_threshold and not is_date(first_word, date_formats):
             continue
-        if is_date(first_word):
+        if is_date(first_word, date_formats):
             if current_block:
                 blocks.append(current_block)
                 current_block = []
@@ -83,58 +104,61 @@ async def parse_pdf(file: UploadFile = File(...), bank: str = Query("ABSA"), acc
     if current_block:
         blocks.append(current_block)
 
-    transactions = []
     previous_balance = None
-    zones = rules["column_zones"]
 
     for block in blocks:
-        match = re.match(r"^(\d{1,2}[\/\-\s]\d{1,2}[\/\-\s]\d{2,4})", block[0]["line"])
+        first_line = block[0]["line"]
+        match = re.match(r"^(\d{1,2}[\/\-\s]\d{1,2}[\/\-\s]\d{2,4})", first_line)
         if not match:
             continue
-
-        date_str = match.group(1).replace(" ", "/").replace("-", "/")
         try:
-            date = datetime.strptime(date_str, "%d/%m/%Y").strftime("%Y-%m-%d")
+            date_obj = datetime.strptime(match.group(1).replace(" ", "/").replace("-", "/"), date_formats[0])
+            date = date_obj.strftime("%Y-%m-%d")
         except:
             continue
 
-        desc_parts, debit, credit, balance = [], None, None, None
+        description_parts = []
+        debit_amount = None
+        credit_amount = None
+        balance_amount = None
+
         for i, line in enumerate(block):
             for j, (x, word) in enumerate(line["xmap"]):
-                word_clean = word.replace(" ", "")
-                if i == 0 and j == 0 and is_date(word):
+                word_clean = word.replace(thousands_sep, '').replace(decimal_sep, '.')
+                if trailing_neg and word_clean.endswith("-"):
+                    word_clean = '-' + word_clean[:-1]
+                if i == 0 and j == 0 and is_date(word, date_formats):
                     continue
-                if zones["description"][0] <= x < zones["description"][1] and not is_amount(word):
-                    desc_parts.append(word)
-                elif zones["debit"][0] <= x < zones["debit"][1] and is_amount(word):
-                    debit = float(word_clean.replace(",", "").replace(" ", ""))
-                elif zones["credit"][0] <= x < zones["credit"][1] and is_amount(word):
-                    credit = float(word_clean.replace(",", "").replace(" ", ""))
-                elif x >= zones["balance"][0] and is_amount(word):
-                    balance = float(word_clean.replace(",", "").replace(" ", ""))
+                if zones["description"][0] <= x < zones["description"][1] and not is_amount(word, thousands_sep, decimal_sep):
+                    description_parts.append(word)
+                elif zones["debit"][0] <= x < zones["debit"][1] and is_amount(word, thousands_sep, decimal_sep):
+                    debit_amount = float(word_clean)
+                elif zones["credit"][0] <= x < zones["credit"][1] and is_amount(word, thousands_sep, decimal_sep):
+                    credit_amount = float(word_clean)
+                elif x >= zones["balance"][0] and is_amount(word, thousands_sep, decimal_sep):
+                    balance_amount = float(word_clean)
 
-        desc = " ".join(desc_parts).strip()
-        raw_amounts = re.findall(r"\d[\d\s]*\.\d{2}-?", desc)
-        desc = clean_description(desc, raw_amounts)
-
+        description = " ".join(description_parts).strip()
         amount_val = 0.0
-        if credit is not None:
-            amount_val = credit
-        elif debit is not None:
-            amount_val = -debit
+        if credit_amount is not None:
+            amount_val = credit_amount
+        elif debit_amount is not None:
+            amount_val = -debit_amount
 
-        balance_val = balance if balance is not None else (previous_balance if previous_balance is not None else 0.0)
+        balance_val = balance_amount if balance_amount is not None else (previous_balance if previous_balance is not None else 0.0)
         balance_diff_error = ""
+
         if previous_balance is not None:
             calc_amount = round(balance_val - previous_balance, 2)
             if abs(calc_amount - amount_val) > 0.01:
                 balance_diff_error = f"Expected {calc_amount:.2f}, got {amount_val:.2f}"
                 amount_val = calc_amount
+
         previous_balance = balance_val
 
         transactions.append({
             "date": date,
-            "description": desc,
+            "description": description,
             "amount": f"{amount_val:.2f}",
             "balance": f"{balance_val:.2f}",
             "calculated_balance": f"{balance_val:.2f}",
@@ -154,9 +178,10 @@ async def parse_pdf(file: UploadFile = File(...), bank: str = Query("ABSA"), acc
     for row in transactions:
         writer.writerow(row)
     output.seek(0)
+    csv_string = output.getvalue()
 
     return JSONResponse(content={
         "success": True,
         "transactions": transactions,
-        "csvData": output.getvalue()
+        "csvData": csv_string
     })
