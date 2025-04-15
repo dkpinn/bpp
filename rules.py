@@ -1,5 +1,7 @@
 # rules.py
 
+# rules.py
+
 PARSING_RULES = {
     "ABSA_CHEQUE_ACCOUNT_STATEMENT": {
         "date_x_threshold": 95,
@@ -12,7 +14,7 @@ PARSING_RULES = {
         "amount_format": {
             "thousands_separator": " ",
             "decimal_separator": ".",
-            "negative_trailing": "Y"
+            "negative_trailing": "N"
         },
         "date_format": {
             "formats": ["%d/%m/%Y", "%m %d"],
