@@ -56,7 +56,8 @@ def is_date(text, formats):
     return False
 
 def normalize_amount_string(s, thousands_sep, decimal_sep, trailing_neg):
-    s = s.replace('\u00A0', '').replace('\u2009', '').replace(' ', '').replace(thousands_sep, '')
+    s = unicodedata.normalize("NFKD", s)
+    s = s.replace('\u00A0', '').replace('\u2009', '').replace('\u202F', '').replace(' ', '').replace(thousands_sep, '')
     s = s.replace(decimal_sep, '.')
     if trailing_neg and s.endswith("-"):
         s = '-' + s[:-1]
