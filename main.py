@@ -55,10 +55,6 @@ def is_date(text, formats):
             continue
     return False
 
-def is_amount(text, thousands_sep, decimal_sep):
-    clean = text.replace('\u00A0', '').replace('\u2009', '').replace(' ', '').replace(thousands_sep, '').replace(decimal_sep, '.')
-    return re.match(r"^-?\d+\.\d{2}$", clean)
-
 def normalize_amount_string(s, thousands_sep, decimal_sep, trailing_neg):
     s = s.replace('\u00A0', '').replace('\u2009', '').replace(' ', '').replace(thousands_sep, '')
     s = s.replace(decimal_sep, '.')
@@ -139,23 +135,26 @@ async def parse_pdf(
             continue
 
         description_parts = []
-        debit_amount = None
-        credit_amount = None
-        balance_amount = None
+        debit_text = None
+        credit_text = None
+        balance_text = None
 
         for i, line in enumerate(block):
             for j, (x, word) in enumerate(line["xmap"]):
-                word_clean = normalize_amount_string(word, thousands_sep, decimal_sep, trailing_neg)
                 if i == 0 and j == 0 and is_date(word, date_formats):
                     continue
-                if zones["description"][0] <= x < zones["description"][1] and not is_amount(word, thousands_sep, decimal_sep):
+                if zones["description"][0] <= x < zones["description"][1]:
                     description_parts.append(word)
-                elif zones["debit"][0] <= x < zones["debit"][1] and is_amount(word, thousands_sep, decimal_sep):
-                    debit_amount = float(word_clean)
-                elif zones["credit"][0] <= x < zones["credit"][1] and is_amount(word, thousands_sep, decimal_sep):
-                    credit_amount = float(word_clean)
-                elif x >= zones["balance"][0] and is_amount(word, thousands_sep, decimal_sep):
-                    balance_amount = float(word_clean)
+                elif zones["debit"][0] <= x < zones["debit"][1]:
+                    debit_text = word
+                elif zones["credit"][0] <= x < zones["credit"][1]:
+                    credit_text = word
+                elif x >= zones["balance"][0]:
+                    balance_text = word
+
+        debit_amount = float(normalize_amount_string(debit_text, thousands_sep, decimal_sep, trailing_neg)) if debit_text else None
+        credit_amount = float(normalize_amount_string(credit_text, thousands_sep, decimal_sep, trailing_neg)) if credit_text else None
+        balance_amount = float(normalize_amount_string(balance_text, thousands_sep, decimal_sep, trailing_neg)) if balance_text else None
 
         description = " ".join(description_parts).strip()
         amount_val = 0.0
