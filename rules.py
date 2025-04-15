@@ -4,10 +4,10 @@ PARSING_RULES = {
     "ABSA_CHEQUE_ACCOUNT_STATEMENT": {
         "date_x_threshold": 95,
         "column_zones": {
-            "description": (95, 305),
-             "debit": (310, 410),   # widened
-            "credit": (412, 510),  # widened
-            "balance": (512, 999)
+            "description": (95, 295),
+             "debit": (295, 425),   # widened
+            "credit": (425, 515),  # widened
+            "balance": (520, 999)
         },
         "amount_format": {
             "thousands_separator": " ",
