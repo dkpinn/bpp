@@ -70,8 +70,8 @@ async def parse_pdf(
 
     with fitz.open(stream=content, filetype="pdf") as doc:
         for page in doc:
-            text = page.get_text()
-            if "ABSA Bank" in text and "Cheque Account Statement" in text:
+            text = page.get_text().lower()
+            if "absa" in text and "cheque account statement" in text:
                 detected_bank = "ABSA"
                 detected_account_type = "Cheque Account Statement"
                 break
