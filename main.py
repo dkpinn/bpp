@@ -58,19 +58,22 @@ def is_date(text, formats):
 def normalize_amount_string(s, thousands_sep, decimal_sep, trailing_neg):
     s = unicodedata.normalize("NFKD", s)
     s = s.replace('\u00A0', '').replace('\u2009', '').replace('\u202F', '')
-    s = s.replace(thousands_sep, '').replace(' ', '')
+    s = s.replace(thousands_sep, '').replace(' ', '')  # Remove thousands separator and spaces
     s = s.replace(decimal_sep, '.')
     if trailing_neg and s.endswith("-"):
         s = '-' + s[:-1]
     return s
 
 def safe_parse_amount(text, thousands_sep, decimal_sep, trailing_neg):
+    print(f"Attempting to parse amount from raw text: '{text}'")
     if not text:
         return None
     try:
         normalized = normalize_amount_string(text, thousands_sep, decimal_sep, trailing_neg)
+        print(f"Normalized amount string: '{normalized}'")
         return float(normalized)
-    except ValueError:
+    except ValueError as e:
+        print(f"Failed to convert '{text}' -> '{normalized}' to float: {e}")
         return None
 
 @app.post("/parse")
@@ -157,10 +160,13 @@ async def parse_pdf(
                 if zones["description"][0] <= x < zones["description"][1]:
                     description_parts.append(word)
                 elif zones["debit"][0] <= x < zones["debit"][1]:
+                    print(f"Raw debit match: x={x}, word='{word}'")
                     debit_text = word
                 elif zones["credit"][0] <= x < zones["credit"][1]:
+                    print(f"Raw credit match: x={x}, word='{word}'")
                     credit_text = word
                 elif x >= zones["balance"][0]:
+                    print(f"Raw balance match: x={x}, word='{word}'")
                     balance_text = word
 
         debit_amount = safe_parse_amount(debit_text, thousands_sep, decimal_sep, trailing_neg)
