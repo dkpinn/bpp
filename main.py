@@ -158,13 +158,14 @@ async def parse_pdf(
         block_has_invalid_amount_field = False
 
         for i, line in enumerate(block):
-            line_has_text_in_amount_zone = any(
-                any(re.search(r'[a-zA-Z]', word) for word in [word for x, word in line["xmap"] if zone[0] <= x < zone[1]])
-                for zone in [zones["debit"], zones["credit"], zones["balance"]]
-            )
-            if line_has_text_in_amount_zone:
-                block_has_invalid_amount_field = True
-                break
+            if i == 0:
+                line_has_text_in_amount_zone = any(
+                    any(re.search(r'[a-zA-Z]', word) for word in [word for x, word in line["xmap"] if zone[0] <= x < zone[1]])
+                    for zone in [zones["debit"], zones["credit"], zones["balance"]]
+                )
+                if line_has_text_in_amount_zone:
+                    block_has_invalid_amount_field = True
+                    break
             for j, (x, word) in enumerate(line["xmap"]):
                 if i == 0 and j == 0 and is_date(word, date_formats):
                     continue
