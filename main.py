@@ -65,15 +65,12 @@ def normalize_amount_string(s, thousands_sep, decimal_sep, trailing_neg):
     return s
 
 def safe_parse_amount(text, thousands_sep, decimal_sep, trailing_neg):
-    print(f"Attempting to parse amount from raw text: '{text}'")
     if not text:
         return None
     try:
         normalized = normalize_amount_string(text, thousands_sep, decimal_sep, trailing_neg)
-        print(f"Normalized amount string: '{normalized}'")
         return float(normalized)
-    except ValueError as e:
-        print(f"Failed to convert '{text}' -> '{normalized}' to float: {e}")
+    except ValueError:
         return None
 
 def combine_column_values(line_map, zone):
@@ -158,7 +155,16 @@ async def parse_pdf(
         credit_text = ""
         balance_text = ""
 
+        block_has_invalid_amount_field = False
+
         for i, line in enumerate(block):
+            line_has_text_in_amount_zone = any(
+                any(re.search(r'[a-zA-Z]', word) for word in [word for x, word in line["xmap"] if zone[0] <= x < zone[1]])
+                for zone in [zones["debit"], zones["credit"], zones["balance"]]
+            )
+            if line_has_text_in_amount_zone:
+                block_has_invalid_amount_field = True
+                break
             for j, (x, word) in enumerate(line["xmap"]):
                 if i == 0 and j == 0 and is_date(word, date_formats):
                     continue
@@ -167,6 +173,9 @@ async def parse_pdf(
             debit_text += combine_column_values(line["xmap"], zones["debit"])
             credit_text += combine_column_values(line["xmap"], zones["credit"])
             balance_text += combine_column_values(line["xmap"], zones["balance"])
+
+        if block_has_invalid_amount_field:
+            continue
 
         debit_amount = safe_parse_amount(debit_text, thousands_sep, decimal_sep, trailing_neg)
         credit_amount = safe_parse_amount(credit_text, thousands_sep, decimal_sep, trailing_neg)
@@ -200,22 +209,24 @@ async def parse_pdf(
             "balance_diff_error": balance_diff_error
         })
 
-    if not transactions:
+    filtered_transactions = [t for t in transactions if t["type"] != "balance"]
+
+    if not filtered_transactions:
         raise HTTPException(status_code=400, detail="No transactions found in PDF")
 
     if preview:
-        return JSONResponse(content={"preview": transactions})
+        return JSONResponse(content={"preview": filtered_transactions})
 
     output = io.StringIO()
     writer = csv.DictWriter(output, fieldnames=["date", "description", "amount", "balance", "calculated_balance", "type", "balance_diff_error"])
     writer.writeheader()
-    for row in transactions:
+    for row in filtered_transactions:
         writer.writerow(row)
     output.seek(0)
     csv_string = output.getvalue()
 
     return JSONResponse(content={
         "success": True,
-        "transactions": transactions,
+        "transactions": filtered_transactions,
         "csvData": csv_string
     })
