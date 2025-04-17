@@ -14,11 +14,19 @@ Update 2025‑04‑17
 • **STANDARD_BANK_BUSINESS_CURRENT_ACCOUNT**
   – added an explicit *service_fee* column and a *month_year* column.
   – tweaked the other x‑coordinate spans per latest visual feedback.
+
+Update 2025‑04‑18
+-----------------
+• **STANDARD_BANK_BUSINESS_CURRENT_ACCOUNT (tweak)**
+  – dramatically widened *description* zone and nudged the numeric columns rightwards.
+  – dropped the dedicated *service_fee* column (turns out the fee amount prints in the debit column).
+  – lowered *date_x_threshold* so we do not mistakenly treat numbers that belong to the balance column as dates.
+  – verified the *negative_trailing* logic – trailing "‑" is preserved.
 """
 
 PARSING_RULES = {
     # ---------------------------------------------------------------------
-    # ABSA – Cheque Account (the one we had working earlier)
+    # ABSA – Cheque Account (unchanged)
     # ---------------------------------------------------------------------
     "ABSA_CHEQUE_ACCOUNT_STATEMENT": {
         "column_zones": {
@@ -43,29 +51,33 @@ PARSING_RULES = {
     },
 
     # ---------------------------------------------------------------------
-    # Standard Bank – Business Current Account
+    # Standard Bank – Business Current Account (re‑tuned 2025‑04‑18)
     # ---------------------------------------------------------------------
     "STANDARD_BANK_BUSINESS_CURRENT_ACCOUNT": {
         "column_zones": {
-            "description":  (0,   250),   # main details on the left
-            "service_fee":  (255, 305),   # Service‑Fee column (ignored for amounts)
-            "debit":        (305, 363),   # purple – amounts incl. trailing "‑"
-            "credit":       (363, 400),   # yellow  – credits, right up to next grey bar
-            "month_year":   (400, 465),   # *new* orange band – "03 22", etc.
-            "balance":      (470, 999),   # pink – running balance
+            # The statement squeezes everything toward the centre – give the
+            # description plenty of room so multi‑line text stays together.
+            "description": (0,   330),   # widened
+            "debit":       (335, 410),   # left‑aligned numbers with trailing “‑”
+            "credit":      (415, 495),   # credits (black text)
+            "balance":     (500, 999),   # running balance (right‑aligned)
         },
         "amount_format": {
             "thousands_separator": ".",  # e.g. 125.000,00
             "decimal_separator":   ",",
-            "negative_trailing":   "Y",  # negative sign appears at the *end*, e.g. 800,00‑
+            "negative_trailing":   "Y",   # minus sign appears *after* the amount
         },
         "date_format": {
-            "formats": ["%m %d"],   # appears as "03 22" etc.
-            "year_optional": "Y",   # we will fill in year from header if needed
+            # Dates are printed as two two‑digit tokens: "03 22" → 22 March (we assume
+            # the year from the statement period). We’ll parse “%m %d”.
+            "formats": ["%m %d"],
+            "year_optional": "Y",
         },
         "description": {
             "multiline": True,
         },
-        "date_x_threshold": 600,  # date is far right on these statements
+        # Any x‑coordinate to the right of this is definitely *not* a date – this
+        # helps us ignore the balance column when scanning for the day/month pair.
+        "date_x_threshold": 440,
     },
 }
