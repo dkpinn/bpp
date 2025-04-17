@@ -1,4 +1,4 @@
-# main.py (debug version with first_page_lines print)
+# main.py (debug version with improved first‑page detection)
 
 from fastapi import FastAPI, File, UploadFile, Query, HTTPException
 from fastapi.responses import JSONResponse
@@ -40,12 +40,19 @@ def extract_lines_by_y(page):
         })
     return ordered
 
+
 def detect_bank_account_type(first_page_lines):
+    """Return the parsing‑rule key given the raw lines of the first page."""
     txt = "\n".join(first_page_lines).upper()
+
+    # ABSA cheque
     if "CHEQUE ACCOUNT" in txt and "ABSA" in txt:
         return "ABSA_CHEQUE_ACCOUNT_STATEMENT"
-    if "BUSINESS CURRENT ACCOUNT" in txt and "STANDARD BANK" in txt:
+
+    # Standard Bank business current (look for either full name or common "STANDARD BANK" substring)
+    if "BUSINESS CURRENT ACCOUNT" in txt and ("STANDARD BANK" in txt or "THE STANDARD BANK" in txt):
         return "STANDARD_BANK_BUSINESS_CURRENT_ACCOUNT"
+
     return None
 
 # ---------- amount utils ---------- #
@@ -61,9 +68,10 @@ def normalize_amount_string(text, thous, dec, trailing_neg):
         text = text.replace(thous, "")
     if dec and dec != ".":
         text = text.replace(dec, ".")
-    # guard commas left
+    # any stray commas left (CSV guard)
     text = text.replace(",", "")
     return text
+
 
 def safe_parse_amount(text, thous, dec, trailing_neg):
     if not text:
@@ -87,8 +95,8 @@ async def parse_pdf(
         # --- read first page to auto‑detect rule set ---
         first_page = doc[0]
         first_lines = extract_lines_by_y(first_page)
-        first_page_lines = [l["line"] for l in first_lines][:60]
-        print(first_page_lines)  #  <<<<<< TEMP DEBUG – remove when done
+        first_page_lines = [l["line"] for l in first_lines]  # **no slicing ‑ use full page**
+        print("FIRST PAGE LINES FOR DETECTION →", first_page_lines[:100])  # print first 100 for brevity
 
         doc_key = detect_bank_account_type(first_page_lines)
         if not doc_key or doc_key not in PARSING_RULES:
@@ -113,12 +121,10 @@ async def parse_pdf(
             all_lines.extend(extract_lines_by_y(page))
 
     # --- build blocks per transaction ---
-    blocks = []
-    cur_block = []
+    blocks, cur_block = [], []
     for line in all_lines:
         x_start = line["positions"][0] if line["positions"] else 0
         if x_start <= date_threshold:
-            # new txn row begins
             if cur_block:
                 blocks.append(cur_block)
                 cur_block = []
@@ -128,7 +134,6 @@ async def parse_pdf(
 
     prev_balance = None
     for block in blocks:
-        # date is last token(s) in Standard Bank; first in Absa
         words_pos = block[0]["xmap"]
         date_tok = None
         for x, w in words_pos:
@@ -137,10 +142,10 @@ async def parse_pdf(
                 break
         if date_tok is None:
             continue
+
         dt = None
         for fmt in date_formats:
             try:
-                # add current year if optional & missing
                 if year_optional and len(date_tok.split()) == 2:
                     date_tok_full = f"{date_tok} {datetime.now().year}"
                 else:
@@ -184,7 +189,6 @@ async def parse_pdf(
             "type": "credit" if amount > 0 else ("debit" if amount < 0 else "balance")
         })
 
-    # --- csv output ---
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=transactions[0].keys())
     writer.writeheader()
