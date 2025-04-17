@@ -1,4 +1,5 @@
 fastapi
 uvicorn
 python-multipart
-PyMuPDF
+PyMuPDF          # you already had this
+pdfminer.six     # <‑‑‑ NEW
