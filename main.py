@@ -1,6 +1,4 @@
-# main.py
-
-from fastapi import FastAPI, File, UploadFile, Query, HTTPException, Form
+from fastapi import FastAPI, File, UploadFile, Query, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import io
@@ -9,7 +7,6 @@ import fitz  # PyMuPDF
 from datetime import datetime
 import re
 from collections import defaultdict
-import unicodedata
 from rules import PARSING_RULES
 
 app = FastAPI()
@@ -46,26 +43,17 @@ def extract_lines_by_y(page):
 
     return ordered_lines
 
-def is_date(text, formats):
-    for fmt in formats:
-        try:
-            datetime.strptime(text.replace(" ", "/").replace("-", "/"), fmt)
-            return True
-        except:
-            continue
-    return False
+def is_valid_amount(text):
+    return re.search(r"\d", text)
 
-def normalize_amount_string(s, thousands_sep, decimal_sep, trailing_neg):
-    s = unicodedata.normalize("NFKD", s)
-    s = s.replace('\u00A0', '').replace('\u2009', '').replace('\u202F', '')
-    s = s.replace(thousands_sep, '').replace(' ', '')
-    s = s.replace(decimal_sep, '.')
-    if trailing_neg and s.endswith("-"):
-        s = '-' + s[:-1]
-    return s
+def normalize_amount_string(text, thousands_sep, decimal_sep, trailing_neg):
+    cleaned = text.replace(thousands_sep, "").replace(decimal_sep, ".").strip()
+    if trailing_neg == "Y" and cleaned.endswith("-"):
+        cleaned = "-" + cleaned[:-1]
+    return cleaned
 
 def safe_parse_amount(text, thousands_sep, decimal_sep, trailing_neg):
-    if not text:
+    if not text or not is_valid_amount(text):
         return None
     try:
         normalized = normalize_amount_string(text, thousands_sep, decimal_sep, trailing_neg)
@@ -73,161 +61,122 @@ def safe_parse_amount(text, thousands_sep, decimal_sep, trailing_neg):
     except ValueError:
         return None
 
-def combine_column_values(line_map, zone):
-    values = [word for x, word in line_map if zone[0] <= x < zone[1] and re.search(r'\d', word)]
-    combined = ''.join(values)
-    return combined.strip() if combined else ''
+def detect_bank_account_type(lines):
+    for line in lines:
+        content = line["line"].lower()
+        if "absa" in content and "cheque account" in content:
+            return "ABSA_CHEQUE_ACCOUNT_STATEMENT"
+        if "standard bank" in content and "business current account" in content:
+            return "STANDARD_BANK_BUSINESS_CURRENT_ACCOUNT"
+    return None
 
 @app.post("/parse")
-async def parse_pdf(
-    preview: bool = Query(False),
-    file: UploadFile = File(...)
-):
+async def parse_pdf(file: UploadFile = File(...), debug: bool = Query(False)):
     content = await file.read()
-
-    detected_bank = None
-    detected_account_type = None
-
     with fitz.open(stream=content, filetype="pdf") as doc:
-        for page in doc:
-            text = page.get_text().lower()
-            if "absa" in text and "cheque account statement" in text:
-                detected_bank = "ABSA"
-                detected_account_type = "Cheque Account Statement"
-                break
+        first_page_lines = extract_lines_by_y(doc[0])
+        account_type = detect_bank_account_type(first_page_lines)
+        if not account_type or account_type not in PARSING_RULES:
+            raise HTTPException(status_code=400, detail="Unsupported or undetected bank/account type")
 
-    if not detected_bank or not detected_account_type:
-        raise HTTPException(status_code=400, detail="Unable to detect bank/account type in PDF")
+        rules = PARSING_RULES[account_type]
+        zones = rules["column_zones"]
+        transactions = []
+        debug_log = []
 
-    key = f"{detected_bank.upper()}_{detected_account_type.upper().replace(' ', '_')}"
-    rules = PARSING_RULES.get(key)
-
-    if not rules:
-        raise HTTPException(status_code=400, detail=f"Unsupported bank/account type configuration: {key}")
-
-    zones = rules["column_zones"]
-    thousands_sep = rules["amount_format"]["thousands_separator"]
-    decimal_sep = rules["amount_format"]["decimal_separator"]
-    trailing_neg = rules["amount_format"]["negative_trailing"] == "Y"
-    date_formats = rules["date_format"]["formats"]
-    multiline_desc = rules["description"].get("multiline", True)
-    date_x_threshold = rules.get("date_x_threshold", 95)
-
-    transactions = []
-    all_lines = []
-
-    with fitz.open(stream=content, filetype="pdf") as doc:
         for page in doc:
             lines = extract_lines_by_y(page)
-            all_lines.extend(lines)
+            current_block = []
 
-    blocks = []
-    current_block = []
-
-    for line in all_lines:
-        x_start = line["positions"][0] if line["positions"] else 0
-        first_word = line["line"].split()[0] if line["line"].split() else ""
-        if x_start < date_x_threshold and not is_date(first_word, date_formats):
-            continue
-        if is_date(first_word, date_formats):
+            for line in lines:
+                line_text = line["line"]
+                date_candidate = next((word for x, word in line["xmap"] if x < rules["date_x_threshold"] and re.match(r"\d{1,2}[ /-]\d{1,2}([ /-]\d{2,4})?", word)), None)
+                if date_candidate:
+                    if current_block:
+                        transactions.append(current_block)
+                        current_block = []
+                current_block.append(line)
             if current_block:
-                blocks.append(current_block)
-                current_block = []
-        current_block.append(line)
-    if current_block:
-        blocks.append(current_block)
+                transactions.append(current_block)
 
-    previous_balance = None
+        output_data = []
+        previous_balance = None
+        for block in transactions:
+            date_str = next((word for x, word in block[0]["xmap"] if x < rules["date_x_threshold"] and re.match(r"\d{1,2}[ /-]\d{1,2}([ /-]\d{2,4})?", word)), None)
+            date_fmt = rules["date_format"]["formats"][0]
+            year_optional = rules["date_format"]["year_optional"] == "Y"
 
-    for block in blocks:
-        first_line = block[0]["line"]
-        match = re.match(r"^(\d{1,2}[\/\-\s]\d{1,2}[\/\-\s]\d{2,4})", first_line)
-        if not match:
-            continue
-        try:
-            date_obj = datetime.strptime(match.group(1).replace(" ", "/").replace("-", "/"), date_formats[0])
-            date = date_obj.strftime("%Y-%m-%d")
-        except:
-            continue
+            if not date_str:
+                continue
 
-        description_parts = []
-        debit_text = ""
-        credit_text = ""
-        balance_text = ""
+            if year_optional and len(date_str.split()[-1]) != 4:
+                date_str += " 2025"
 
-        block_has_invalid_amount_field = False
+            try:
+                date_obj = datetime.strptime(date_str, date_fmt)
+                date = date_obj.strftime("%Y-%m-%d")
+            except:
+                continue
 
-        for i, line in enumerate(block):
-            if i == 0:
-                line_has_text_in_amount_zone = any(
-                    any(re.search(r'[a-zA-Z]', word) for word in [word for x, word in line["xmap"] if zone[0] <= x < zone[1]])
-                    for zone in [zones["debit"], zones["credit"], zones["balance"]]
-                )
-                if line_has_text_in_amount_zone:
-                    block_has_invalid_amount_field = True
-                    break
-            for j, (x, word) in enumerate(line["xmap"]):
-                if i == 0 and j == 0 and is_date(word, date_formats):
+            description_parts = []
+            debit_text = ""
+            credit_text = ""
+            balance_text = ""
+
+            for line in block:
+                skip_line = False
+                for x, word in line["xmap"]:
+                    if zones["debit"][0] <= x < zones["balance"][1] and re.search(r"[a-zA-Z]", word):
+                        skip_line = True
+                        break
+                if skip_line:
                     continue
-                if zones["description"][0] <= x < zones["description"][1]:
-                    description_parts.append(word)
-            debit_text += combine_column_values(line["xmap"], zones["debit"])
-            credit_text += combine_column_values(line["xmap"], zones["credit"])
-            balance_text += combine_column_values(line["xmap"], zones["balance"])
 
-        if block_has_invalid_amount_field:
-            continue
+                for x, word in line["xmap"]:
+                    if zones["description"][0] <= x < zones["description"][1]:
+                        description_parts.append(word)
+                    elif zones["debit"][0] <= x < zones["debit"][1]:
+                        debit_text += word
+                    elif zones["credit"][0] <= x < zones["credit"][1]:
+                        credit_text += word
+                    elif zones["balance"][0] <= x < zones["balance"][1]:
+                        balance_text += word
 
-        debit_amount = safe_parse_amount(debit_text, thousands_sep, decimal_sep, trailing_neg)
-        credit_amount = safe_parse_amount(credit_text, thousands_sep, decimal_sep, trailing_neg)
-        balance_amount = safe_parse_amount(balance_text, thousands_sep, decimal_sep, trailing_neg)
+            debit_amount = safe_parse_amount(debit_text, **rules["amount_format"])
+            credit_amount = safe_parse_amount(credit_text, **rules["amount_format"])
+            balance_amount = safe_parse_amount(balance_text, **rules["amount_format"])
 
-        description = " ".join(description_parts).strip()
-        amount_val = 0.0
-        if credit_amount is not None:
-            amount_val = credit_amount
-        elif debit_amount is not None:
-            amount_val = -debit_amount
+            description = " ".join(description_parts).strip()
+            amount_val = 0.0
+            if credit_amount is not None:
+                amount_val = credit_amount
+            elif debit_amount is not None:
+                amount_val = -debit_amount
 
-        balance_val = balance_amount if balance_amount is not None else (previous_balance if previous_balance is not None else 0.0)
-        balance_diff_error = ""
+            balance_val = balance_amount if balance_amount is not None else (previous_balance or 0.0)
+            previous_balance = balance_val
 
-        if previous_balance is not None:
-            calc_amount = round(balance_val - previous_balance, 2)
-            if abs(calc_amount - amount_val) > 0.01:
-                balance_diff_error = f"Expected {calc_amount:.2f}, got {amount_val:.2f}"
-                amount_val = calc_amount
+            tx_type = "credit" if amount_val > 0 else ("debit" if amount_val < 0 else "balance")
+            if tx_type == "balance":
+                continue  # Skip pure balance entries
 
-        previous_balance = balance_val
+            output_data.append({
+                "date": date,
+                "description": description,
+                "amount": f"{amount_val:.2f}",
+                "balance": f"{balance_val:.2f}",
+                "type": tx_type
+            })
 
-        transactions.append({
-            "date": date,
-            "description": description,
-            "amount": f"{amount_val:.2f}",
-            "balance": f"{balance_val:.2f}",
-            "calculated_balance": f"{balance_val:.2f}",
-            "type": "credit" if amount_val > 0 else ("debit" if amount_val < 0 else "balance"),
-            "balance_diff_error": balance_diff_error
+        output = io.StringIO()
+        writer = csv.DictWriter(output, fieldnames=["date", "description", "amount", "balance", "type"])
+        writer.writeheader()
+        for row in output_data:
+            writer.writerow(row)
+        output.seek(0)
+
+        return JSONResponse(content={
+            "success": True,
+            "transactions": output_data,
+            "csvData": output.getvalue()
         })
-
-    filtered_transactions = [t for t in transactions if t["type"] != "balance"]
-
-    if not filtered_transactions:
-        raise HTTPException(status_code=400, detail="No transactions found in PDF")
-
-    if preview:
-        return JSONResponse(content={"preview": filtered_transactions})
-
-    output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=["date", "description", "amount", "balance", "calculated_balance", "type", "balance_diff_error"])
-    writer.writeheader()
-    for row in filtered_transactions:
-        writer.writerow(row)
-    output.seek(0)
-    csv_string = output.getvalue()
-
-    return JSONResponse(content={
-        "success": True,
-        "transactions": filtered_transactions,
-        "csvData": csv_string
-    })
