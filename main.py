@@ -3,10 +3,10 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 import io, csv, re
 from typing import List, Dict, Optional
+from datetime import datetime
 
 from rules import PARSING_RULES
 
-# Try pdfminer first for keywords; fallback to fitz
 try:
     from pdfminer.high_level import extract_pages  # type: ignore
     from pdfminer.layout import LTTextContainer  # type: ignore
@@ -32,7 +32,12 @@ except ImportError:
 
     _USE_PDFMINER = False
 
-import fitz  # always used for word-level extraction
+import fitz  # for full-page extraction
+
+app = FastAPI()
+
+_ALPHA_RE = re.compile(r"[A-Za-z]")
+_NUMERIC_CHARS_RE = re.compile(r"^[0-9.,\- ]+$")
 
 def detect_account_type(sample: str) -> Optional[str]:
     s = sample.lower()
@@ -51,18 +56,12 @@ def normalize_amount_string(raw: str, thousands_sep: str, decimal_sep: str, trai
     txt = txt.replace(thousands_sep, "").replace(decimal_sep, ".")
     return sign + txt
 
-_ALPHA_RE = re.compile(r"[A-Za-z]")
-_NUMERIC_CHARS_RE = re.compile(r"^[0-9.,\- ]+$")
-
 def _looks_numeric(txt: str) -> bool:
     return bool(_NUMERIC_CHARS_RE.match(txt))
-
-app = FastAPI()
 
 @app.post("/parse")
 async def parse_pdf(file: UploadFile = File(...)):
     pdf_bytes = await file.read()
-
     sample_words = _first_page_words_pdfminer(pdf_bytes)
     sample_text = " ".join(sample_words)
 
@@ -73,6 +72,7 @@ async def parse_pdf(file: UploadFile = File(...)):
     cfg = PARSING_RULES[rule_key]
     zones = cfg["column_zones"]
     fmt = cfg["amount_format"]
+    output_order = cfg.get("output_order", ["description", "debit", "credit", "balance"])
 
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     transactions: List[Dict[str, object]] = []
@@ -88,16 +88,16 @@ async def parse_pdf(file: UploadFile = File(...)):
             desc, debit_raw, credit_raw, bal_raw, date_raw = [], [], [], [], []
 
             for x, token in parts:
-                if "date" in zones and zones["date"][0] <= x <= zones["date"][1]:
-                    date_raw.append(token)
-                elif zones["description"][0] <= x <= zones["description"][1]:
+                if zones["description"][0] <= x <= zones["description"][1]:
                     desc.append(token)
-                elif zones["debit"][0] <= x <= zones["debit"][1]:
+                elif zones.get("debit") and zones["debit"][0] <= x <= zones["debit"][1]:
                     debit_raw.append(token)
-                elif zones["credit"][0] <= x <= zones["credit"][1]:
+                elif zones.get("credit") and zones["credit"][0] <= x <= zones["credit"][1]:
                     credit_raw.append(token)
-                elif zones["balance"][0] <= x <= zones["balance"][1]:
+                elif zones.get("balance") and zones["balance"][0] <= x <= zones["balance"][1]:
                     bal_raw.append(token)
+                elif zones.get("date") and zones["date"][0] <= x <= zones["date"][1]:
+                    date_raw.append(token)
 
             amounts_concat = " ".join(debit_raw + credit_raw + bal_raw)
             if not amounts_concat or _ALPHA_RE.search(amounts_concat):
@@ -106,63 +106,41 @@ async def parse_pdf(file: UploadFile = File(...)):
             debit_txt = "".join(debit_raw).strip()
             credit_txt = "".join(credit_raw).strip()
             bal_txt = "".join(bal_raw).strip()
+            date_txt = " ".join(date_raw).strip()
 
             try:
-                debit_val = float(normalize_amount_string(debit_txt, fmt["thousands_separator"], fmt["decimal_separator"], fmt["negative_trailing"])) if debit_txt else None
+                debit_val = float(normalize_amount_string(debit_txt, fmt["thousands_separator"], fmt["decimal_separator"], fmt["negative_trailing"])) if debit_txt else 0
             except ValueError:
-                debit_val = None
+                debit_val = 0
             try:
-                credit_val = float(normalize_amount_string(credit_txt, fmt["thousands_separator"], fmt["decimal_separator"], fmt["negative_trailing"])) if credit_txt else None
+                credit_val = float(normalize_amount_string(credit_txt, fmt["thousands_separator"], fmt["decimal_separator"], fmt["negative_trailing"])) if credit_txt else 0
             except ValueError:
-                credit_val = None
+                credit_val = 0
             try:
                 bal_val = float(normalize_amount_string(bal_txt, fmt["thousands_separator"], fmt["decimal_separator"], fmt["negative_trailing"])) if bal_txt else None
             except ValueError:
                 bal_val = None
 
-            txn = {
+            amount_val = credit_val - debit_val
+
+            row = {
+                "date": date_txt,
                 "description": " ".join(desc).strip(),
-                "debit": debit_val,
-                "credit": credit_val,
+                "amount": amount_val,
                 "balance": bal_val,
             }
-
-            if date_raw:
-                txn["date"] = " ".join(date_raw).strip()
-
-            transactions.append(txn)
+            transactions.append({key: row.get(key) for key in output_order})
 
     if not transactions:
         raise HTTPException(status_code=400, detail="No transactions could be extracted with current rules; please verify column zones")
 
-    # ----------------- Format output per rules.py --------------------------
-    output_fields = cfg.get("output_order", ["description", "debit", "credit", "balance"])
-    processed_transactions = []
-
-    for txn in transactions:
-        amount = None
-        if txn.get("debit") is not None:
-            amount = -txn["debit"]
-        elif txn.get("credit") is not None:
-            amount = txn["credit"]
-
-        output = {
-            "date": txn.get("date", ""),
-            "description": txn["description"],
-            "amount": amount,
-            "balance": txn["balance"],
-        }
-
-        processed_transactions.append({k: output.get(k, "") for k in output_fields})
-
-    # ----------------- Generate CSV ----------------------------------------
     buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=output_fields)
+    writer = csv.DictWriter(buf, fieldnames=transactions[0].keys())
     writer.writeheader()
-    writer.writerows(processed_transactions)
+    writer.writerows(transactions)
 
     return {
         "success": True,
-        "transactions": processed_transactions,
+        "transactions": transactions,
         "csvData": buf.getvalue(),
     }
