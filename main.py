@@ -62,12 +62,21 @@ def safe_parse_amount(text, thousands_sep, decimal_sep, trailing_neg):
         return None
 
 def detect_bank_account_type(lines):
+    """
+    Inspect a few lines of raw text and return the PARSING_RULES key
+    that applies.  Returns None if no rule matches.
+    """
     for line in lines:
-        content = line["line"].lower()
-        if "absa" in content and "cheque account" in content:
+        txt = line["line"].lower()
+
+        # ABSA Cheque
+        if "absa" in txt and "cheque account" in txt:
             return "ABSA_CHEQUE_ACCOUNT_STATEMENT"
-        if "standard bank" in content and "business current account" in content:
+
+        # Standard Bank – Business Current Account
+        if "standard bank" in txt and "business current account" in txt:
             return "STANDARD_BANK_BUSINESS_CURRENT_ACCOUNT"
+
     return None
 
 @app.post("/parse")
