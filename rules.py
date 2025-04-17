@@ -1,6 +1,20 @@
-# --- rules.py ---------------------------------------------------------------
+# rules.py
+
+# Central place to keep parsing instructions for each supported bank / account type.
+# Each entry provides:
+#   • column_zones – x‑coordinate spans (in pt) for description, debit, credit, balance
+#   • amount_format  – how to interpret the numbers in those columns
+#   • date_format    – (kept for future use) how the date appears, should you want to parse it
+#   • description.multiline – allow long descriptions to wrap (we simply join the words)
+#   • date_x_threshold       – x coordinate at which we expect the date token to start
+#
+# Adjust / add new dicts here when new statement layouts need to be supported.
+
 PARSING_RULES = {
-    "ABSA_CHEQUE_ACCOUNT_STATEMENT": {   # <-- unchanged
+    # ---------------------------------------------------------------------
+    # ABSA – Cheque Account (the one we had working earlier)
+    # ---------------------------------------------------------------------
+    "ABSA_CHEQUE_ACCOUNT_STATEMENT": {
         "column_zones": {
             "description": (95, 305),
             "debit":       (310, 390),
@@ -8,42 +22,44 @@ PARSING_RULES = {
             "balance":     (475, 999),
         },
         "amount_format": {
-            "thousands_separator": " ",
-            "decimal_separator":  ".",
-            "negative_trailing":  "N",
+            "thousands_separator": " ",   # space
+            "decimal_separator":   ".",
+            "negative_trailing":   "N",  # values are printed with leading minus (‑123.45)
         },
         "date_format": {
-            "formats": ["%d/%m/%Y"],
+            "formats":       ["%d/%m/%Y"],
             "year_optional": "N",
         },
-        "description": {"multiline": True},
+        "description": {
+            "multiline": True,
+        },
         "date_x_threshold": 95,
     },
 
-    # ------------------------------------------------------------------ #
-    # NEW: Standard Bank  – Business Current Account (PDF “Details / Fee / Debits …” layout)
-    # ------------------------------------------------------------------ #
+    # ---------------------------------------------------------------------
+    # Standard Bank – Business Current Account
+    # ---------------------------------------------------------------------
     "STANDARD_BANK_BUSINESS_CURRENT_ACCOUNT": {
-        # measured on several samples; tweak if your coordinates differ
         "column_zones": {
-            "description": (  0, 260),   # “Details” text block
-            # “Service Fee” column lives roughly 260‑300 – we just ignore it
-            "debit":       (300, 420),
-            "credit":      (420, 520),
-            "balance":     (520, 999),
+            "description": (0,   250),   # details column is left‑aligned
+            # there is a Service‑Fee column (~255‑295) that we just ignore;
+            # next come the money columns:
+            "debit":       (300, 370),
+            "credit":      (375, 450),
+            "balance":     (455, 999),
         },
         "amount_format": {
-            "thousands_separator": ".",   # 40.929,08  -> 40929.08
-            "decimal_separator":  ",",
-            "negative_trailing":  "Y",    #   800,00‑  ->  -800,00
+            "thousands_separator": ".",  # e.g. 125.000,00
+            "decimal_separator":   ",",
+            "negative_trailing":   "Y",  # negative sign appears at the *end*, e.g. 800,00‑
         },
         "date_format": {
-            # in these PDFs the date column shows “MM DD”.  Year comes from the
-            # “Statement from … to …” header, so we allow a missing year.
-            "formats": ["%m %d %Y", "%m %d"],
-            "year_optional": "Y",
+            "formats": ["%m %d"],   # appears as "03 22" etc.
+            "year_optional": "Y",   # we will fill in year from header if needed
         },
-        "description": {"multiline": True},
-        "date_x_threshold": 260,          # left edge of the date column
+        "description": {
+            "multiline": True,
+        },
+        "date_x_threshold": 600,  # date is far right on these statements
     },
 }
