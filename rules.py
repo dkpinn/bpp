@@ -1,92 +1,146 @@
-# rules.py
+# main.py
 
-"""Central place to keep parsing instructions for each supported bank / account type.
+from fastapi import FastAPI, UploadFile, File, HTTPException
+import io, csv, re
+from typing import List, Dict, Optional
+from datetime import datetime
 
-Each entry provides:
-    • column_zones – x‑coordinate spans (in pt) for description, debit, credit, balance (and any extras)
-    • amount_format  – how to interpret the numbers in those columns
-    • date_format    – (kept for future use) how the date appears, should you want to parse it
-    • description.multiline – allow long descriptions to wrap (we simply join the words)
-    • date_x_threshold       – x coordinate at which we expect the date token to start
+from rules import PARSING_RULES
 
-Update 2025‑04‑17
------------------
-• **STANDARD_BANK_BUSINESS_CURRENT_ACCOUNT**
-  – added an explicit *service_fee* column and a *month_year* column.
-  – tweaked the other x‑coordinate spans per latest visual feedback.
+try:
+    from pdfminer.high_level import extract_pages  # type: ignore
+    from pdfminer.layout import LTTextContainer  # type: ignore
 
-Update 2025‑04‑18
------------------
-• **STANDARD_BANK_BUSINESS_CURRENT_ACCOUNT (tweak)**
-  – dramatically widened *description* zone and nudged the numeric columns rightwards.
-  – dropped the dedicated *service_fee* column (turns out the fee amount prints in the debit column).
-  – lowered *date_x_threshold* so we do not mistakenly treat numbers that belong to the balance column as dates.
-  – verified the *negative_trailing* logic – trailing "‑" is preserved.
+    def _first_page_words_pdfminer(pdf_bytes: bytes) -> List[str]:
+        words: List[str] = []
+        for page_layout in extract_pages(io.BytesIO(pdf_bytes), maxpages=1):
+            for element in page_layout:
+                if isinstance(element, LTTextContainer):
+                    txt = element.get_text().strip()
+                    if txt:
+                        words.extend(txt.split())
+        return words
 
-Update 2025‑04‑19
------------------
-• **STANDARD_BANK_BUSINESS_CURRENT_ACCOUNT (major realign)**
-  – credit/debit values were still being polluted by the day‑of‑month token (the stray 22.0 / 23.0 / … you saw).
-    Root cause: the credit / debit columns started too far left, overlapping the date pair.
-  – **Fix**: pushed all numeric columns ~130 pt to the right and let *description* own pretty much the whole
-    left half of the page.  Date detection is now gated by `date_x_threshold = 120`.
-  – sanity‑tested on the same statement: description text is populated, credit/debit/balance amounts land in
-    the correct buckets, no 22.0 ghosts.
-"""
+    _USE_PDFMINER = True
+except ImportError:
+    import fitz  # PyMuPDF
 
-PARSING_RULES = {
-    # ---------------------------------------------------------------------
-    # ABSA – Cheque Account (unchanged)
-    # ---------------------------------------------------------------------
-    "ABSA_CHEQUE_ACCOUNT_STATEMENT": {
-        "column_zones": {
-            "description": (95, 305),
-            "debit":       (310, 390),
-            "credit":      (395, 470),
-            "balance":     (475, 999),
-        },
-        "amount_format": {
-            "thousands_separator": " ",   # space
-            "decimal_separator":   ".",
-            "negative_trailing":   "N",  # values are printed with leading minus (‑123.45)
-        },
-        "date_format": {
-            "formats":       ["%d/%m/%Y"],
-            "year_optional": "N",
-        },
-        "description": {
-            "multiline": True,
-        },
-        "date_x_threshold": 95,
-    },
+    def _first_page_words_pdfminer(pdf_bytes: bytes) -> List[str]:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        words = [w[4] for w in doc.load_page(0).get_text("words")]
+        return words
 
-    # ---------------------------------------------------------------------
-    # Standard Bank – Business Current Account (re‑tuned 2025‑04‑19)
-    # ---------------------------------------------------------------------
-    "STANDARD_BANK_BUSINESS_CURRENT_ACCOUNT": {
-        "column_zones": {
-            # Give the description *all* the left‑hand real‑estate –
-            # this keeps wrapped text intact and isolates the date pair.
-            "description": (0,   460),    # widened even more
-            # numeric columns slid ~130 pt to the right compared to 2025‑04‑18
-            "debit":       (465, 540),
-            "credit":      (545, 630),
-            "balance":     (635, 999),
-        },
-        "amount_format": {
-            "thousands_separator": ".",   # e.g. 125.000,00
-            "decimal_separator":   ",",
-            "negative_trailing":   "Y",    # minus sign appears *after* the amount
-        },
-        "date_format": {
-            # Dates are printed as two tokens: "03 22" → 22 March.
-            "formats": ["%m %d"],
-            "year_optional": "Y",
-        },
-        "description": {
-            "multiline": True,
-        },
-        # Anything past 120 pt definitely isn't a date – ensures we ignore the debit/credit/balance columns.
-        "date_x_threshold": 120,
-    },
-}
+    _USE_PDFMINER = False
+
+import fitz  # for full-page extraction
+
+app = FastAPI()
+
+_ALPHA_RE = re.compile(r"[A-Za-z]")
+_NUMERIC_CHARS_RE = re.compile(r"^[0-9.,\- ]+$")
+
+def detect_account_type(sample: str) -> Optional[str]:
+    s = sample.lower()
+    if "absa" in s and "cheque account" in s:
+        return "ABSA_CHEQUE_ACCOUNT_STATEMENT"
+    if "standard bank" in s and "business current account" in s:
+        return "STANDARD_BANK_BUSINESS_CURRENT_ACCOUNT"
+    return None
+
+def normalize_amount_string(raw: str, thousands_sep: str, decimal_sep: str, trailing_neg: str) -> str:
+    txt = raw.strip()
+    sign = ""
+    if trailing_neg.upper() == "Y" and txt.endswith("-"):
+        sign = "-"
+        txt = txt[:-1]
+    txt = txt.replace(thousands_sep, "").replace(decimal_sep, ".")
+    return sign + txt
+
+def _looks_numeric(txt: str) -> bool:
+    return bool(_NUMERIC_CHARS_RE.match(txt))
+
+@app.post("/parse")
+async def parse_pdf(file: UploadFile = File(...)):
+    pdf_bytes = await file.read()
+    sample_words = _first_page_words_pdfminer(pdf_bytes)
+    sample_text = " ".join(sample_words)
+
+    rule_key = detect_account_type(sample_text)
+    if not rule_key or rule_key not in PARSING_RULES:
+        raise HTTPException(status_code=400, detail="Unsupported or undetected bank/account type")
+
+    cfg = PARSING_RULES[rule_key]
+    zones = cfg["column_zones"]
+    fmt = cfg["amount_format"]
+    output_order = cfg.get("output_order", ["description", "debit", "credit", "balance"])
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    transactions: List[Dict[str, object]] = []
+
+    for page in doc:
+        words = page.get_text("words")
+        line_map: Dict[tuple, List[tuple]] = {}
+        for x0, y0, x1, y1, w, block_no, line_no, word_no in words:
+            line_map.setdefault((block_no, line_no), []).append((x0, w))
+
+        for parts in line_map.values():
+            parts.sort(key=lambda t: t[0])
+            desc, debit_raw, credit_raw, bal_raw, date_raw = [], [], [], [], []
+
+            for x, token in parts:
+                if zones["description"][0] <= x <= zones["description"][1]:
+                    desc.append(token)
+                elif zones.get("debit") and zones["debit"][0] <= x <= zones["debit"][1]:
+                    debit_raw.append(token)
+                elif zones.get("credit") and zones["credit"][0] <= x <= zones["credit"][1]:
+                    credit_raw.append(token)
+                elif zones.get("balance") and zones["balance"][0] <= x <= zones["balance"][1]:
+                    bal_raw.append(token)
+                elif zones.get("date") and zones["date"][0] <= x <= zones["date"][1]:
+                    date_raw.append(token)
+
+            amounts_concat = " ".join(debit_raw + credit_raw + bal_raw)
+            if not amounts_concat or _ALPHA_RE.search(amounts_concat):
+                continue
+
+            debit_txt = "".join(debit_raw).strip()
+            credit_txt = "".join(credit_raw).strip()
+            bal_txt = "".join(bal_raw).strip()
+            date_txt = " ".join(date_raw).strip()
+
+            try:
+                debit_val = float(normalize_amount_string(debit_txt, fmt["thousands_separator"], fmt["decimal_separator"], fmt["negative_trailing"])) if debit_txt else 0
+            except ValueError:
+                debit_val = 0
+            try:
+                credit_val = float(normalize_amount_string(credit_txt, fmt["thousands_separator"], fmt["decimal_separator"], fmt["negative_trailing"])) if credit_txt else 0
+            except ValueError:
+                credit_val = 0
+            try:
+                bal_val = float(normalize_amount_string(bal_txt, fmt["thousands_separator"], fmt["decimal_separator"], fmt["negative_trailing"])) if bal_txt else None
+            except ValueError:
+                bal_val = None
+
+            amount_val = credit_val - debit_val
+
+            row = {
+                "date": date_txt,
+                "description": " ".join(desc).strip(),
+                "amount": amount_val,
+                "balance": bal_val,
+            }
+            transactions.append({key: row.get(key) for key in output_order})
+
+    if not transactions:
+        raise HTTPException(status_code=400, detail="No transactions could be extracted with current rules; please verify column zones")
+
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=transactions[0].keys())
+    writer.writeheader()
+    writer.writerows(transactions)
+
+    return {
+        "success": True,
+        "transactions": transactions,
+        "csvData": buf.getvalue(),
+    }
