@@ -72,7 +72,7 @@ async def parse_pdf(file: UploadFile = File(...)):
     cfg = PARSING_RULES[rule_key]
     zones = cfg["column_zones"]
     fmt = cfg["amount_format"]
-    output_order = cfg.get("output_order", ["description", "debit", "credit", "balance"])
+    output_order = cfg.get("output_order", ["date", "description", "amount", "balance"])
 
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     transactions: List[Dict[str, object]] = []
@@ -135,7 +135,7 @@ async def parse_pdf(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="No transactions could be extracted with current rules; please verify column zones")
 
     buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=transactions[0].keys())
+    writer = csv.DictWriter(buf, fieldnames=output_order)
     writer.writeheader()
     writer.writerows(transactions)
 
